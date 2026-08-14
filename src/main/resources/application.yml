@@ -1,0 +1,134 @@
+# ============================================================================
+# Discord Clone — 默认开发配置 (MySQL，本机 Navicat 可连接)
+# 先在 MySQL 中创建数据库 discord_clone，JPA 自动建表 + 数据初始化。
+# ============================================================================
+
+spring:
+  application:
+    name: discord-clone
+
+  # MySQL 数据源
+  datasource:
+    url: jdbc:mysql://localhost:3306/discord_clone?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&sessionVariables=sql_mode=''
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: "123456"
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+    defer-datasource-initialization: true
+
+  # 数据初始化：启动时自动执行 data.sql 插入测试账号（JPA 建表之后）
+  sql:
+    init:
+      mode: always
+
+  # 禁用 Redis (用内存 CacheService 替代，无需安装 Redis)
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  cache:
+    type: simple
+
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+
+server:
+  port: 4001
+  servlet:
+    context-path: /
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:discord-clone-dev-secret-key-2026-minimum-256-bits-long}
+    expiration: ${JWT_EXPIRATION:604800000}
+  snowflake:
+    worker-id: ${WORKER_ID:1}
+  minio:
+    enabled: false
+  storage:
+    local-path: ./data/uploads
+  file:
+    max-size-free: 26214400
+    max-size-nitro: 524288000
+  gateway:
+    heartbeat-interval: 41250
+    session-timeout: 30000
+  voice:
+    server-port: 4003
+    ws-port: 4004
+  rate-limit:
+    login-per-minute: 10
+    message-per-second: 20
+
+logging:
+  level:
+    org.discord: DEBUG
+    org.springframework.web: INFO
+    org.hibernate.SQL: WARN
+
+---
+# --- PostgreSQL 配置 (需要安装 PostgreSQL，通过此 profile 启用) ---
+# mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+spring:
+  config:
+    activate:
+      on-profile: postgres
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/discord_clone}
+    username: ${DB_USER:discord}
+    password: ${DB_PASSWORD:discord_dev_2026}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: never
+
+app:
+  minio:
+    enabled: true
+    endpoint: http://localhost:9000
+    access-key: discord_admin
+    secret-key: minio_dev_2026
+    bucket-attachments: discord-attachments
+    bucket-avatars: discord-avatars
+    bucket-thumbnails: discord-thumbnails
+
+---
+# --- 生产环境配置 ---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+# 生产环境：JWT 密钥必须显式提供，缺失则启动失败（不落任何默认值）
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration: ${JWT_EXPIRATION:604800000}
+
+logging:
+  level:
+    org.discord: WARN
+    org.springframework: WARN

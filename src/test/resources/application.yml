@@ -1,0 +1,50 @@
+# ============================================================
+# 测试专用配置 — H2 内存库，零外部依赖
+# ============================================================
+
+spring:
+  application:
+    name: discord-clone-test
+
+  datasource:
+    url: jdbc:h2:mem:discord_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+    defer-datasource-initialization: true
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:test-schema.sql
+      data-locations: classpath:test-data.sql
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  cache:
+    type: simple
+
+server:
+  port: 0
+
+app:
+  jwt:
+    secret: discord-clone-test-secret-key-2026-minimum-256-bits-long
+    expiration: 604800000
+  voice:
+    server-port: 51003
+    ws-port: 51004
+  # 测试共享上下文:限流放得很宽,避免整条测试类共享 Spring 上下文时相互踩到登录次数
+  rate-limit:
+    login-per-minute: 100000
+    message-per-second: 100000
