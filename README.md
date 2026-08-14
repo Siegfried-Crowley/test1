@@ -135,22 +135,27 @@ npm start
 | 侧边栏私信列表 | 左侧"私信"图标进入，实时刷新最后消息预览 |
 | DM 实时广播 | 新私信只推给频道双方，越权访问被拒 |
 
-### 🎤 语音频道（控制面）
-> ⚠️ 目前只实现**语音控制面**（谁在线、进出广播、静音/禁听、说话检测），**不含真实音频传输**。原因：浏览器无法直发 UDP，前端 WebRTC 客户端与后端裸 RTP 服务器协议不兼容。
+### 🎤 语音频道（真实音频）
+> ✅ 已实现**真实音频**：`MediaRecorder(audio/webm;codecs=opus)` → 专用 WebSocket 中继 `/ws/voice`（服务端透明转发，前缀 8 字节发送者 ID）→ `MediaSource/SourceBuffer` 播放。Chrome/Edge/Firefox 通用，延迟约 200-500ms。旧 UDP SFU 骨架保留在 `voice-server/`（未启用）。
 | 功能 | 说明 |
 |------|------|
+| 真实通话 | 讲话实时送达同频道成员，对方声音经中继播放 |
 | 进出广播 | 加入/离开通过 Gateway OP4 实时推给同频道成员 |
 | 说话检测 (VAD) | 说话时头像绿框高亮（需麦克风权限） |
-| 麦克风控制 | 点击按钮一键静音/取消静音 |
-| 耳机控制 | 一键禁听 |
+| 静音/禁听 | 静音用 `pause()/resume()` 不重启录音器；禁听静音所有远端播放器 |
+| 中途加入可解码 | 服务端缓存每个发送者的 WebM init segment，新人加入自动重放 |
+| 自动播放策略 | 远端播放首次以静音起播，点"点击启用声音"手势恢复 |
 
 ### 👥 服务器管理
 | 功能 | 说明 |
 |------|------|
 | 创建服务器 | 点"+"按钮，输入名称即可 |
-| 频道管理 | 创建文字/语音频道，设置分类 |
-| 角色管理 | 创建角色，配置权限 |
-| 邀请系统 | 生成邀请链接（TODO） |
+| 频道管理 | 创建文字/语音频道，分类分组、重命名/删除、频道级权限覆盖 |
+| 角色管理 | 创建/编辑/删除角色、勾选权限位、批量分配成员 |
+| 邀请系统 | 生成/删除邀请链接（可预览），按链接加入即进服务器 |
+| 成员管理 | 右侧成员列表按在线/离线分组，右键踢出/封禁/解除封禁/改昵称 |
+| 服务器设置 | 概览/成员/角色/邀请四 Tab：改名、上传图标 |
+| 退出/解散 | 右键服务器退出；owner 解散前需先转让或删除（防误删） |
 
 ### 🤝 好友系统
 | 功能 | 说明 |
@@ -173,6 +178,29 @@ npm start
 
 **权限覆盖 UI**：文字/语音频道右侧齿轮 → 选择角色/成员，左键=允许、右键=拒绝对应权限位（查看、发消息、管理消息、上传、连接语音、说话）。
 
+### 💬 消息增强
+| 功能 | 说明 |
+|------|------|
+| Markdown 渲染 | 加粗/斜体/行内代码/代码块/链接/emoji（轻量 tokenizer 直接产出 React 节点，天然防 XSS） |
+| @提及 | `@everyone`（需权限）与 `@用户名` 高亮，点击跳转资料 |
+| 表情回应 | 消息 hover 🙂 添加/切换，已回应列表 + 本人高亮 |
+| 回复 (Reply) | hover ↩ 引用原消息，输入框带引用条可取消，渲染被引用摘要 |
+| 置顶 (Pins) | 频道头部 📌 打开置顶面板，点击跳转对应消息 |
+| 正在输入 | 频道底部"xxx 正在输入…"（6 秒超时消失） |
+| 未读角标 | 非当前频道有新消息时侧边栏显示数字角标，切回清零 |
+| 消息搜索 | 频道头部 🔍 按关键词搜索（可按频道过滤），点击结果跳转 |
+
+### 🛡️ 账号与安全
+| 功能 | 说明 |
+|------|------|
+| 邮箱验证 | 注册后发 6 位验证码（打印到后端日志），未验证不能登录 |
+| 两步验证 (2FA) | 设置开启后，登录先输密码再输验证码（验证码打印到日志） |
+| 修改密码 | 校验旧密码后更新 |
+| 头像/资料页 | 头像上传、改用户名/签名/全局名；点任意头像看公开资料卡、发起私信 |
+| 在线状态切换 | 用户栏手动切 online/idle/dnd/offline，实时推给好友 |
+| 服务器审计日志 | 踢人/封禁/删服/角色/频道变更全程留痕，管理员可查 |
+| 限流保护 | 登录按 IP 10 次/分、发消息按用户 20 次/秒，超限 429 |
+
 ---
 
 ## ✅ 自动化测试
@@ -181,8 +209,8 @@ npm start
 
 | 套件 | 命令 | 覆盖 |
 |------|------|------|
-| 后端 `src/test` | `mvn test` | 登录/注册、安全配置（voice/受保护接口需鉴权、业务异常返回 JSON 而非 403）、消息 CRUD、私信流程与越权、附件持久化（12 个用例） |
-| 前端 `client/src/gateway/GatewayClient.test.ts` | `cd client && npm test` | 网关重连状态机：Identify、幂等 connect、断线走 Resume 不重新 Identify、连接稳定不死循环、destroy 后过期回调不触发重连、心跳 ACK（6 个用例） |
+| 后端 `src/test` | `mvn test` | 登录/注册、安全配置、消息 CRUD、私信与越权、附件持久化、**邀请/加入/退出/踢人/封禁、角色 CRUD、表情回应/置顶/回复/搜索/输入中、改密/邮箱验证/2FA/登录限流、真实音频转发与静音禁听**（37 个用例） |
+| 前端 `client/src` | `cd client && npm test` | 网关重连状态机（Identify、幂等 connect、断线 Resume、心跳 ACK）+ **语音帧协议解析/join 帧构造/MIME 探测**（18 个用例） |
 
 > 后端另有 `server/` 树（docker 部署用）也带同一套测试：`mvn -f server/pom.xml test`。
 > 测试账号密码哈希已统一修正为 `test123` 对应的 bcrypt 值（原先 `server/` 种子误用了 `password` 的哈希，docker 登录会失败）。
@@ -255,42 +283,62 @@ npm start
 ```
 D:\IDEA DATABAS\TEST1\              # 项目根目录
 │
-├── 📁 server/                       # 🖥️ 后端 (Spring Boot + Tomcat)
+├── 📁 src/                            # 🖥️ 后端主树 (线上 IDEA 部署用, MySQL)
+│   │                                 #    与 server/ 同结构，用 sync.bat 一键同步
+│   └── 📁 main/java/org/discord/  (见下方 server/ 结构)
+│
+├── 📁 server/                       # 🖥️ 后端 (Spring Boot + Tomcat; docker 用 H2/PostgreSQL)
 │   ├── 📁 src/main/java/org/discord/
 │   │   ├── 📄 DiscordApplication.java   # 启动入口 (implements SpringBootServletInitializer)
 │   │   ├── 📁 config/                   # 配置类
 │   │   │   ├── SecurityConfig.java      # Spring Security (JWT无状态)
 │   │   │   ├── JwtAuthFilter.java       # JWT 令牌过滤器
-│   │   │   ├── WebSocketConfig.java     # Gateway WS 配置
+│   │   │   ├── RateLimitFilter.java     # 登录按IP 10次/分、发消息按用户 20次/秒
+│   │   │   ├── WebSocketConfig.java     # Gateway + /ws/voice 注册
 │   │   │   └── RedisConfig.java         # Redis 配置
-│   │   ├── 📁 entity/                   # 📦 数据实体 (14个类)
+│   │   ├── 📁 entity/                   # 📦 数据实体 (19个类)
 │   │   │   ├── User.java, Guild.java, GuildMember.java
-│   │   │   ├── Channel.java, Message.java (分区表)
+│   │   │   ├── Channel.java, Message.java (分区表, MessageId)
 │   │   │   ├── Role.java, MemberRole.java
 │   │   │   ├── ChannelOverwrite.java (权限覆盖)
 │   │   │   ├── Relationship.java (好友关系)
 │   │   │   ├── VoiceState.java, VoiceAllocation.java, VoiceServer.java
-│   │   │   └── DmChannel.java, DmChannelMember.java
-│   │   ├── 📁 repository/               # 🔍 数据访问层 (14个接口)
-│   │   ├── 📁 service/                  # ⚙️ 业务逻辑层 (7个服务)
-│   │   │   ├── AuthService.java         # 注册/登录
-│   │   │   ├── GuildService.java        # 服务器管理
+│   │   │   ├── DmChannel.java, DmChannelMember.java
+│   │   │   ├── Invite.java (邀请), GuildBan.java (封禁), AuditLogEntry.java (审计日志)
+│   │   ├── 📁 repository/               # 🔍 数据访问层 (17个接口)
+│   │   ├── 📁 service/                  # ⚙️ 业务逻辑层 (14个服务)
+│   │   │   ├── AuthService.java         # 注册/登录/邮箱验证/2FA/改密
+│   │   │   ├── UserService.java         # 资料/头像
+│   │   │   ├── GuildService.java        # 服务器管理 (成员/角色/频道)
 │   │   │   ├── ChannelService.java      # 频道管理
-│   │   │   ├── MessageService.java      # 消息CRUD (含去重)
+│   │   │   ├── MessageService.java      # 消息CRUD/回应/置顶/搜索
 │   │   │   ├── PermissionService.java   # 64位权限引擎 ⭐
 │   │   │   ├── FriendService.java       # 好友系统
-│   │   │   └── VoiceService.java        # 语音调度
-│   │   ├── 📁 controller/               # 🌐 REST API (6个控制器)
+│   │   │   ├── DmService.java           # 私信
+│   │   │   ├── AttachmentService.java   # 文件上传
+│   │   │   ├── VoiceService.java        # 语音调度 (联动音频路由)
+│   │   │   ├── InviteService.java       # 邀请链接
+│   │   │   ├── AuditLogService.java     # 审计日志
+│   │   │   ├── RateLimitService.java    # 固定窗口限流
+│   │   │   └── CacheService.java        # 进程内缓存 (验证码/mfa_token)
+│   │   ├── 📁 controller/               # 🌐 REST API (11个控制器)
 │   │   │   ├── AuthController.java      # /api/auth/*
+│   │   │   ├── UserController.java      # /api/users/*
 │   │   │   ├── GuildController.java     # /api/guilds/*
+│   │   │   ├── GuildMessageController.java  # /api/guilds/:id/messages/search
 │   │   │   ├── ChannelController.java   # /api/channels/*
 │   │   │   ├── MessageController.java   # /api/channels/:id/messages/*
+│   │   │   ├── InviteController.java    # /api/invites/*
 │   │   │   ├── FriendController.java    # /api/friends/*
+│   │   │   ├── DmController.java        # /api/dms/*
+│   │   │   ├── AttachmentController.java# /api/attachments/*
 │   │   │   └── VoiceController.java     # /api/voice/*
 │   │   ├── 📁 gateway/                  # 🔌 WebSocket Gateway
-│   │   │   └── GatewayWebSocketHandler.java  # 协议实现 (Opcode 1-12)
-│   │   ├── 📁 voice/                    # 🔊 Voice SFU
-│   │   │   └── VoiceSfuServer.java      # UDP 选择性转发引擎
+│   │   │   └── GatewayWebSocketHandler.java  # 协议实现 (Opcode 1-12) + 公会广播
+│   │   ├── 📁 voice/                    # 🔊 语音
+│   │   │   ├── VoiceAudioHandler.java   # /ws/voice 音频中继 (控制帧+二进制帧)
+│   │   │   ├── VoiceAudioRouter.java    # 频道转发表 (静音/禁听/initChunk缓存)
+│   │   │   └── VoiceSfuServer.java      # UDP SFU 骨架 (未启用)
 │   │   ├── 📁 dto/                      # 数据传输对象
 │   │   └── 📁 util/
 │   │       ├── JwtUtil.java             # JWT 令牌工具
@@ -298,7 +346,8 @@ D:\IDEA DATABAS\TEST1\              # 项目根目录
 │   │
 │   ├── 📁 src/main/resources/
 │   │   ├── 📄 application.yml           # 配置 (3个Profile: default/tomcat/prod)
-│   │   ├── 📄 schema.sql                # 15张表的完整建表脚本
+│   │   ├── 📄 schema.sql                # 建表脚本
+│   │   ├── 📄 data.sql                  # H2 测试种子
 │   │   └── 📄 seed.sql                  # 3个测试用户
 │   │
 │   ├── 📁 src/main/webapp/WEB-INF/
@@ -312,37 +361,53 @@ D:\IDEA DATABAS\TEST1\              # 项目根目录
 │   ├── 📁 public/
 │   │   └── index.html
 │   ├── 📁 src/
-│   │   ├── 📁 components/               # UI 组件 (12个)
-│   │   │   ├── App.tsx                  # 根组件 (Gateway连接管理)
-│   │   │   ├── MainLayout.tsx           # 主布局 (4列网格)
-│   │   │   ├── 📁 auth/                 # 登录/注册
-│   │   │   │   └── LoginPage.tsx        # 登录+注册双模式
-│   │   │   ├── 📁 guild/                # 服务器侧栏
+│   │   ├── 📁 components/               # UI 组件 (21个)
+│   │   │   ├── App.tsx                  # 根组件 (Gateway连接管理 + 事件路由)
+│   │   │   ├── MainLayout.tsx           # 主布局 (4列: guilds/channels/main/members)
+│   │   │   ├── 📁 auth/
+│   │   │   │   └── LoginPage.tsx        # 登录+注册+邮箱验证+2FA 流程
+│   │   │   ├── 📁 guild/                # 服务器管理
 │   │   │   │   ├── GuildSidebar.tsx     # 服务器图标列表
-│   │   │   │   ├── ChannelSidebar.tsx   # 频道列表
-│   │   │   │   └── CreateGuildModal.tsx # 创建服务器弹窗
-│   │   │   ├── 📁 chat/                 # 聊天区域
+│   │   │   │   ├── ChannelSidebar.tsx   # 频道树 (分类分组/未读角标)
+│   │   │   │   ├── DmSidebar.tsx        # 私信列表
+│   │   │   │   ├── MemberList.tsx       # 成员列表 (在线/离线分组)
+│   │   │   │   ├── CreateGuildModal.tsx # 创建服务器
+│   │   │   │   ├── CreateChannelModal.tsx   # 创建频道 (类型/分类)
+│   │   │   │   ├── JoinGuildModal.tsx   # 通过邀请码加入
+│   │   │   │   ├── GuildSettingsModal.tsx   # 服务器设置 (概览/成员/角色/邀请)
+│   │   │   │   └── ChannelPermissionsModal.tsx # 频道权限覆盖
+│   │   │   ├── 📁 chat/                 # 聊天
 │   │   │   │   ├── ChatArea.tsx         # 聊天主面板
-│   │   │   │   ├── MessageList.tsx      # 消息列表 (自动滚动)
-│   │   │   │   └── MessageInput.tsx     # 输入框 (Enter发送)
-│   │   │   ├── 📁 voice/                # 语音面板
-│   │   │   │   └── VoicePanel.tsx       # 浮动语音控制窗
-│   │   │   ├── 📁 friends/              # 好友页面
+│   │   │   │   ├── MessageList.tsx      # 消息 (markdown/回应/回复/输入中)
+│   │   │   │   ├── MessageInput.tsx     # 输入框 (回复条/附件)
+│   │   │   │   ├── PinsPanel.tsx        # 置顶面板
+│   │   │   │   └── SearchModal.tsx      # 消息搜索
+│   │   │   ├── 📁 voice/
+│   │   │   │   └── VoicePanel.tsx       # 语音面板 (真实音频 + 控制)
+│   │   │   ├── 📁 friends/
 │   │   │   │   └── FriendsPage.tsx      # 好友列表+请求管理
 │   │   │   └── 📁 common/
-│   │   │       └── UserPanel.tsx        # 底部用户栏
+│   │   │       ├── UserPanel.tsx        # 底部用户栏 (状态切换/设置)
+│   │   │       ├── ProfileModal.tsx     # 个人资料编辑 (头像/密码/2FA)
+│   │   │       └── UserProfileModal.tsx # 他人资料卡
 │   │   ├── 📁 gateway/
 │   │   │   └── GatewayClient.ts         # WebSocket 客户端 (心跳/重连/事件)
 │   │   ├── 📁 voice/
-│   │   │   └── VoiceClient.ts           # WebRTC 语音客户端
+│   │   │   ├── VoiceClient.ts           # 录音/中继/播放管理
+│   │   │   ├── RemotePlayback.ts        # MediaSource 播放器 (按远端用户)
+│   │   │   ├── voiceProtocol.ts         # 帧协议 (纯函数, 可单测)
+│   │   │   └── voiceProtocol.test.ts    # vitest 用例
 │   │   ├── 📁 store/
 │   │   │   └── index.ts                # Zustand 状态管理 (归一化)
 │   │   ├── 📁 utils/
 │   │   │   └── api.ts                  # REST API 封装 (axios)
 │   │   └── 📁 styles/
 │   │       └── discord.css             # 暗色主题完整样式
-│   └── 📄 .env                         # 连接地址配置
+│   └── 📄 .env                         # 连接地址配置 (VITE_*)
 │
+├── 📁 .github/workflows/
+│   └── 📄 ci.yml                       # 🤖 CI: 后端 mvn test + 前端 npm test
+├── 📄 sync.bat                         # 🔁 一键同步 src/main/java + src/test → server/
 ├── 📄 docker-compose.yml               # 🐳 一键编排所有服务
 ├── 📄 pom.xml                          # Maven 依赖 (WAR打包)
 └── 📄 README.md                        # 📖 本文档
@@ -524,9 +589,22 @@ cd client && npm start
 
 | 方法 | 路径 | 说明 | 请求体 |
 |------|------|------|--------|
-| POST | `/api/auth/register` | 注册 | `{username, email, password}` |
-| POST | `/api/auth/login` | 登录 | `{email, password}` |
+| POST | `/api/auth/register` | 注册（返回 `verified=false`，需先邮箱验证） | `{username, email, password}` |
+| POST | `/api/auth/verify-email` | 邮箱验证（验证码打印到后端日志） | `{code}` |
+| POST | `/api/auth/login` | 登录（未验证→403；开 2FA→返回 `requires_2fa`+`mfa_token`） | `{email, password}` |
+| POST | `/api/auth/2fa/verify` | 2FA 第二步，换取真 token | `{mfa_token, code}` |
+| POST | `/api/auth/2fa/enable` | 开启两步验证（打印验证码） | — |
+| POST | `/api/auth/2fa/disable` | 关闭两步验证 | — |
+| POST | `/api/auth/change-password` | 修改密码 | `{oldPassword, newPassword}` |
 | GET | `/api/auth/me` | 当前用户 | Header: `Authorization: Bearer <token>` |
+
+### 用户接口 `/api/users`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| PATCH | `/api/users/me` | 修改用户名/签名/全局名 |
+| POST | `/api/users/me/avatar` | 上传头像（multipart） |
+| GET | `/api/users/{id}` | 公开资料 |
 
 ### 服务器接口 `/api/guilds`
 
@@ -535,27 +613,57 @@ cd client && npm start
 | GET | `/api/guilds` | 我的服务器列表 |
 | POST | `/api/guilds` | 创建服务器 |
 | GET | `/api/guilds/{id}` | 服务器详情 |
+| DELETE | `/api/guilds/{id}` | 解散服务器（仅 owner） |
 | GET | `/api/guilds/{id}/channels` | 频道列表 |
 | GET | `/api/guilds/{id}/members` | 成员列表 |
 | GET | `/api/guilds/{id}/roles` | 角色列表 |
+| POST | `/api/guilds/{id}/roles` | 创建角色 |
+| PATCH | `/api/guilds/{id}/roles/{roleId}` | 编辑角色（名称/颜色/权限位/排序） |
+| DELETE | `/api/guilds/{id}/roles/{roleId}` | 删除角色（@everyone 不可删） |
+| PUT | `/api/guilds/{id}/members/{userId}/roles` | 批量分配角色 |
+| PATCH | `/api/guilds/{id}/members/me` | 改自己的昵称 |
+| PATCH | `/api/guilds/{id}/members/{userId}` | 改他人昵称 |
+| PUT | `/api/guilds/{id}/members/{userId}/kick` | 踢出成员 |
+| PUT | `/api/guilds/{id}/members/{userId}/ban` | 封禁成员 |
+| DELETE | `/api/guilds/{id}/bans/{userId}` | 解除封禁 |
+| GET | `/api/guilds/{id}/bans` | 封禁列表 |
+| DELETE | `/api/guilds/{id}/members/me` | 退出服务器（owner 需先转让/删除） |
+| GET | `/api/guilds/{id}/invites` | 邀请列表 |
+| POST | `/api/guilds/{id}/invites` | 创建邀请 |
+| GET | `/api/guilds/{id}/messages/search` | 消息搜索（`?query=&channel_id=`） |
+| GET | `/api/guilds/{id}/audit-log` | 审计日志 |
+
+### 邀请接口 `/api/invites`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/invites/{code}` | 加入前预览（guild/channel 摘要） |
+| POST | `/api/invites/{code}/join` | 通过邀请加入服务器 |
+| DELETE | `/api/invites/{code}` | 删除邀请（创建者或 MANAGE_GUILD） |
 
 ### 频道接口 `/api/channels`
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/channels` | 创建频道 |
+| POST | `/api/channels` | 创建频道（`{type, parent_id}` 支持分类） |
 | GET | `/api/channels/{id}` | 频道详情 |
-| PATCH | `/api/channels/{id}` | 修改频道 |
+| PATCH | `/api/channels/{id}` | 修改频道（含 `position`/`parent_id` 排序） |
 | DELETE | `/api/channels/{id}` | 删除频道 |
+| POST | `/api/channels/{id}/typing` | 上报"正在输入" |
 
 ### 消息接口 `/api/channels/{id}/messages`
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `.../messages?limit=50&before={id}` | 消息历史 |
-| POST | `.../messages` | 发送消息 |
+| POST | `.../messages` | 发送消息（支持 `message_reference` 回复） |
 | PATCH | `.../messages/{id}` | 编辑消息 |
 | DELETE | `.../messages/{id}` | 删除消息 |
+| PUT | `.../messages/{id}/reactions/{emoji}` | 添加表情回应 |
+| DELETE | `.../messages/{id}/reactions/{emoji}` | 移除表情回应 |
+| GET | `.../pins` | 置顶列表 |
+| POST | `.../pins/{messageId}` | 置顶消息 |
+| DELETE | `.../pins/{messageId}` | 取消置顶 |
 
 ### 好友接口 `/api/friends`
 
@@ -572,10 +680,11 @@ cd client && npm start
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/voice/join` | 加入语音频道 |
+| POST | `/api/voice/join` | 加入语音频道（返回分配 token，供 `/ws/voice` join 帧鉴权） |
 | POST | `/api/voice/leave` | 离开语音频道 |
 | POST | `/api/voice/mute` | 切换静音 |
 | POST | `/api/voice/deaf` | 切换禁听 |
+| WS | `/ws/voice` | 真实音频中继：文本控制帧（join/leave/ping/pong）+ 二进制 WebM Opus 音频帧 |
 
 ---
 
@@ -754,7 +863,9 @@ Gateway 是实时通信的核心，完全对齐 **Discord Gateway Protocol v9**�
 
 ## 🎤 语音系统架构
 
-> 📌 **设计文档（愿景）**：下面对应的是"理想中的完整音频链路"。当前实际实现是**控制面**（进出/静音/说话检测广播），**音频传输未实现**——见上方"已知限制"。当前实际：前端 `VoicePanel` 通过 Gateway OP4 加入/离开 → 服务端 `VoiceService` 记录状态并广播 `VOICE_STATE_UPDATE`；`VoiceSfuServer` 维护转发表但无音频数据流。
+> 📌 **已启用：WebSocket Opus 中继**（跨浏览器通用，无需开放 UDP 端口）：
+> 前端 `MediaRecorder(audio/webm;codecs=opus)` 每 50ms 产出一片音频 → 直接经 `/ws/voice` 二进制帧发给后端 → `VoiceAudioRouter` 按频道**透明转发**给其他成员（帧前缀 8 字节发送者 ID，跳过发送者本人/禁听者，静音发送者不发，缓存 init segment 供中途加入重放）→ 接收端 `RemotePlayback`（MediaSource/SourceBuffer）播放。
+> 下面对应的 **UDP/SFU 架构是当初的愿景**，`VoiceSfuServer` 保留骨架但**未启用**。
 
 ```
 🎤 麦克风
@@ -791,8 +902,8 @@ Gateway 是实时通信的核心，完全对齐 **Discord Gateway Protocol v9**�
 - **MCU**：服务端混音后发一个流 → 服务端 CPU 高、无法单独调音量
 - **SFU**：服务端只转发，每个客户端收 N 个独立流 → 低延迟、可单独调音量
 
-> 实现代码：`server/.../voice/VoiceSfuServer.java`  
-> 前端：`client/src/voice/VoiceClient.ts`
+> 实际音频链路（已启用）：后端 `src/main/java/org/discord/voice/VoiceAudioHandler.java` + `VoiceAudioRouter.java`（`/ws/voice`）；前端 `client/src/voice/VoiceClient.ts` + `RemotePlayback.ts` + `voiceProtocol.ts`。  
+> UDP SFU 骨架（未启用）：`server/.../voice/VoiceSfuServer.java`
 
 ---
 
@@ -882,9 +993,10 @@ app.minio.endpoint:             # MinIO 地址
 ### 前端配置 `client/.env`
 
 ```env
-REACT_APP_API_URL=http://localhost:8080/discord
-REACT_APP_GATEWAY_URL=ws://localhost:8080/discord/ws
-REACT_APP_VOICE_URL=ws://localhost:4004
+# 前端同源，由 Vite 代理转发到后端（见 vite.config.ts proxy）
+VITE_API_URL=http://localhost:8080/discord        # REST API 目标
+VITE_GATEWAY_URL=ws://localhost:3000/ws           # Gateway，走 Vite /ws 代理
+VITE_VOICE_URL=ws://localhost:3000/ws/voice       # 音频中继，走 Vite /ws 代理（废弃旧 4004）
 ```
 
 ---
@@ -893,14 +1005,14 @@ REACT_APP_VOICE_URL=ws://localhost:4004
 
 | 端口 | 服务 | 协议 | 说明 |
 |------|------|------|------|
-| **8080** | Tomcat | HTTP/WS | REST API + Gateway WebSocket |
-| **4003** | Voice SFU | UDP | 音频数据转发 |
-| **4004** | Voice WS | WebSocket | Voice Server 信令（预留） |
+| **8080** | Tomcat | HTTP/WS | REST API + Gateway WebSocket + `/ws/voice` 音频中继 |
+| **4003** | Voice SFU | UDP | 音频数据转发（骨架保留，未启用） |
+| ~~4004~~ | ~~Voice WS~~ | ~~WebSocket~~ | ~~预留~~ **已废弃**：音频改走 8080 的 `/ws/voice` |
 | 5432 | PostgreSQL | TCP | 数据库 |
 | 6379 | Redis | TCP | 缓存 + Pub/Sub |
 | 9000 | MinIO | HTTP | S3 文件存储 API |
 | 9001 | MinIO Console | HTTP | 管理控制台 |
-| 3000 | React Dev Server | HTTP | 前端开发 |
+| 3000 | React Dev Server | HTTP | 前端开发（/api、/ws 代理到 8080） |
 
 ---
 
@@ -1046,38 +1158,32 @@ REACT_APP_API_URL=http://localhost:4001/discord
 
 ## ⚠️ 已知限制
 
-- **无真实音频传输**：语音目前是控制面（进出/静音/说话检测），听不到声音。要加需 WebSocket Opus 中继（WebCodecs，仅 Chrome/Edge）或服务端 DTLS/SRTP 网关（数周工作量）
-- **无表情选择器、@提及、消息搜索**：不在当前范围
-- **无头像/用户资料页、手动在线状态切换**
-- **单机内存版**：SFU 转发表与缓存（`CacheService`）都是进程内实现，不支持多实例横向扩展
+- **WebRTC 点对点未启用**：真实音频走服务端 WS 中继（延迟 ~200-500ms，学习项目可接受）；UDP SFU / 点对点是后续挑战
+- **表情选择器是常用集而非全量 Unicode**；@提及是精确用户名匹配，无模糊下拉补全
+- **单机内存版**：语音转发表与缓存（`CacheService`）都是进程内实现，不支持多实例横向扩展
 - **会话 resume 窗口 30 秒**：超过后重连需重新 Identify
-- **docker-compose 配置已修正但本机未装 Docker 验证**：`server/` 树与 `src/` 树保持手动同步，改后端记得两处都改
+- **docker-compose 配置已修正但本机未装 Docker 验证**：`src/` 与 `server/` 双树用 `sync.bat` 一键同步（仅排除 `DiscordApplication.java`），改完后端记得跑一次
 
 ---
 
 ## 📋 待办 (Todo)
 
-> 下一步建议按优先级做这两件工程化事项，做完项目就"闭环"了。
+> ✅ 下列工程化事项已全部完成，项目已"闭环"。剩下的是长期挑战（见"学习路线建议"第四阶段）。
 
-### ☑️ 1. 配置 CI（每次 push 自动跑测试）
+### ☑️ 1. 配置 CI（每次 push 自动跑测试）— ✅ 已完成
 
-**目标**：项目推上 GitHub 后，每次 `git push` 云端自动跑 `mvn test`（后端 12 个集成测试）+ `npm test`（前端 6 个状态机测试），红了立刻提示。
+`.github/workflows/ci.yml` 已就绪：后端 job（`setup-java@17` → `mvn test`）+ 前端 job（`setup-node@20` → `cd client && npm ci && npm test`）。
 
-**待办步骤**：
-- [ ] `git init` 并把项目推到 GitHub（当前项目还不是 git 仓库）
-- [ ] 在仓库加 `.github/workflows/ci.yml`，配置两个 job：
-  - [ ] 后端 job：`setup-java@17` → `mvn test`
-  - [ ] 前端 job：`setup-node@20` → `cd client && npm ci && npm test`
-- [ ] push 后确认 Actions 跑绿
+项目已 `git init -b main` 并完成首次本地提交（`feat: complete Discord clone feature set`，已 gitignore `data/`、`client/.env`、`target/`、`dist/`）。**尚未 push 到 GitHub** —— 推上去后 Actions 会自动跑（这一步由你自己执行）。
 
-### ☑️ 2. 收敛双源码树（消除手动同步的坑）
+### ☑️ 2. 收敛双源码树 — ✅ 已完成（方案 B：同步脚本）
 
-**问题**：`src/`（线上 IDEA 部署用，MySQL）与 `server/`（docker 部署用，H2/PostgreSQL）是两份几乎相同的后端源码，改一处要手动复制另一处，容易漂移。
+已写 `sync.bat`（robocopy 把 `src\main\java`、`src\test` 同步到 `server\`，仅排除 `DiscordApplication.java`）。改完后端跑一次即可：
 
-**待办步骤（任选其一）**：
-- [ ] **方案 A（推荐）**：删掉 `server/src`，让 Dockerfile 直接基于根 `src/` 构建（只保留 `server/` 的 Dockerfile / pom / 资源差异）
-- [ ] **方案 B**：写一个同步脚本（如 `sync.bat`）一键把 `src/main/java` 复制到 `server/src/main/java`，减少漏改
-- [ ] 同步后跑 `mvn test` + `mvn -f server/pom.xml test` 双验证
+```bat
+sync.bat
+mvn -f server/pom.xml test   :: 双验证
+```
 
 ---
 
