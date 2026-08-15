@@ -7,6 +7,10 @@ import org.discord.dto.request.RegisterRequest;
 import org.discord.dto.request.VerifyEmailRequest;
 import org.discord.dto.response.AuthResponse;
 import org.discord.entity.User;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
+import org.discord.exception.UnauthorizedException;
 import org.discord.repository.UserRepository;
 import org.discord.util.JwtUtil;
 import org.discord.util.SnowflakeGenerator;
@@ -16,6 +20,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -27,6 +32,11 @@ public class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
     private static final Duration CODE_TTL = Duration.ofMinutes(10);
     private static final Duration MFA_TTL = Duration.ofMinutes(5);
+    private static final Duration ATTEMPT_TTL = Duration.ofMinutes(10);
+    private static final int MAX_CODE_ATTEMPTS = 5;
+
+    /** 密码学安全随机源(替代 Math.random 生成验证码) */
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -39,7 +49,7 @@ public class AuthService {
     @Transactional
     public Map<String, Object> register(RegisterRequest req) {
         if (userRepository.existsByEmail(req.getEmail())) {
-            throw new RuntimeException("Email already registered");
+            throw new BadRequestException("Email already registered");
         }
 
         User user = User.builder()
@@ -70,19 +80,26 @@ public class AuthService {
     @Transactional
     public AuthResponse verifyEmail(VerifyEmailRequest req) {
         User user = userRepository.findByEmail(req.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // 尝试次数限流:防止暴力枚举 6 位验证码
+        if (codeAttempts("email:" + user.getId()) >= MAX_CODE_ATTEMPTS) {
+            throw new UnauthorizedException("Too many verification attempts, please register again");
+        }
 
         String cached = cacheService.get(emailCodeKey(user.getId()));
         if (cached == null) {
-            throw new RuntimeException("Verification code expired, please register again");
+            throw new UnauthorizedException("Verification code expired, please register again");
         }
         if (!cached.equals(req.getCode().trim())) {
-            throw new RuntimeException("Invalid verification code");
+            incrementCodeAttempts("email:" + user.getId());
+            throw new UnauthorizedException("Invalid verification code");
         }
 
         user.setVerified(true);
         userRepository.save(user);
         cacheService.delete(emailCodeKey(user.getId()));
+        cacheService.delete(codeAttemptsKey("email:" + user.getId()));
 
         String token = jwtUtil.generateToken(user.getId(), user.getEmail());
         return AuthResponse.builder()
@@ -96,14 +113,14 @@ public class AuthService {
 
     public Map<String, Object> login(LoginRequest req) {
         User user = userRepository.findByEmail(req.getEmail())
-                .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+                .orElseThrow(() -> new UnauthorizedException("Invalid credentials"));
 
         if (!passwordEncoder.matches(req.getPassword(), user.getPasswordHash())) {
-            throw new RuntimeException("Invalid credentials");
+            throw new UnauthorizedException("Invalid credentials");
         }
 
         if (!user.isVerified()) {
-            throw new RuntimeException("Please verify your email first");
+            throw new ForbiddenException("Please verify your email first");
         }
 
         if (user.isMfaEnabled()) {
@@ -134,19 +151,26 @@ public class AuthService {
     public AuthResponse verify2fa(String mfaToken, String code) {
         String userIdStr = cacheService.get(mfaTokenKey(mfaToken));
         if (userIdStr == null) {
-            throw new RuntimeException("Invalid mfa token");
+            throw new UnauthorizedException("Invalid mfa token");
         }
         Long userId = Long.parseLong(userIdStr);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // 尝试次数限流:防止暴力枚举 2FA 验证码
+        if (codeAttempts("2fa:" + userId) >= MAX_CODE_ATTEMPTS) {
+            throw new UnauthorizedException("Too many 2FA attempts, please login again");
+        }
 
         String cached = cacheService.get(mfaCodeKey(userId));
         if (cached == null || !cached.equals(code.trim())) {
-            throw new RuntimeException("Invalid 2FA code");
+            incrementCodeAttempts("2fa:" + userId);
+            throw new UnauthorizedException("Invalid 2FA code");
         }
 
         cacheService.delete(mfaTokenKey(mfaToken));
         cacheService.delete(mfaCodeKey(userId));
+        cacheService.delete(codeAttemptsKey("2fa:" + userId));
 
         String token = jwtUtil.generateToken(user.getId(), user.getEmail());
         return AuthResponse.builder()
@@ -162,9 +186,9 @@ public class AuthService {
     @Transactional
     public Map<String, Object> enable2fa(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
         if (user.isMfaEnabled()) {
-            throw new RuntimeException("2FA already enabled");
+            throw new BadRequestException("2FA already enabled");
         }
         user.setMfaEnabled(true);
         userRepository.save(user);
@@ -175,7 +199,7 @@ public class AuthService {
     @Transactional
     public Map<String, Object> disable2fa(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
         user.setMfaEnabled(false);
         userRepository.save(user);
         cacheService.delete(mfaCodeKey(userId));
@@ -187,9 +211,9 @@ public class AuthService {
     @Transactional
     public void changePassword(Long userId, ChangePasswordRequest req) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
         if (!passwordEncoder.matches(req.getOldPassword(), user.getPasswordHash())) {
-            throw new RuntimeException("Invalid credentials");
+            throw new UnauthorizedException("Invalid credentials");
         }
         user.setPasswordHash(passwordEncoder.encode(req.getNewPassword()));
         userRepository.save(user);
@@ -197,22 +221,38 @@ public class AuthService {
 
     public AuthResponse.UserInfo getCurrentUser(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
         return buildUserInfo(user);
     }
 
     // ===== 验证码辅助 =====
 
     private void sendEmailCode(User user) {
-        String code = String.format("%06d", (int)(Math.random() * 1000000));
+        String code = String.format("%06d", RANDOM.nextInt(1000000));
         cacheService.set(emailCodeKey(user.getId()), code, CODE_TTL);
         log.info("[邮箱验证码] user={} email={} code={}", user.getId(), user.getEmail(), code);
     }
 
     private void sendMfaCode(User user) {
-        String code = String.format("%06d", (int)(Math.random() * 1000000));
+        String code = String.format("%06d", RANDOM.nextInt(1000000));
         cacheService.set(mfaCodeKey(user.getId()), code, MFA_TTL);
         log.info("[2FA 验证码] user={} email={} code={}", user.getId(), user.getEmail(), code);
+    }
+
+    // ===== 验证码尝试限流 =====
+
+    private int codeAttempts(String key) {
+        String v = cacheService.get(codeAttemptsKey(key));
+        return v != null ? Integer.parseInt(v) : 0;
+    }
+
+    private void incrementCodeAttempts(String key) {
+        int n = codeAttempts(key) + 1;
+        cacheService.set(codeAttemptsKey(key), String.valueOf(n), ATTEMPT_TTL);
+    }
+
+    private String codeAttemptsKey(String key) {
+        return "code_attempts:" + key;
     }
 
     private String emailCodeKey(Long userId) {

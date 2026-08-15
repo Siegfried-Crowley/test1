@@ -73,6 +73,10 @@ app:
   rate-limit:
     login-per-minute: 10
     message-per-second: 20
+    # 是否信任 X-Forwarded-For(仅可信反向代理部署时设为 true,否则客户端可伪造 IP 绕过限流)
+    trust-proxy: false
+  upload:
+    max-size: 26214400
 
 logging:
   level:

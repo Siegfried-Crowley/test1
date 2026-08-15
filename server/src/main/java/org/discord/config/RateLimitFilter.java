@@ -41,6 +41,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Value("${app.rate-limit.message-per-second:20}")
     private int messageLimit;
 
+    /**
+     * 是否信任 X-Forwarded-For。
+     * 默认 false:直接使用 socket 源地址,防止客户端伪造请求头绕过 IP 限流;
+     * 仅当应用部署在可信反向代理(nginx 等)之后且由代理设置该头时才置为 true。
+     */
+    @Value("${app.rate-limit.trust-proxy:false}")
+    private boolean trustProxy;
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -68,9 +76,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String clientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
+        // 默认不信任 XFF:直接取 TCP 连接的源地址,堵住伪造请求头绕过限流的洞。
+        if (trustProxy) {
+            String xff = request.getHeader("X-Forwarded-For");
+            if (xff != null && !xff.isBlank()) {
+                // 由可信代理逐跳追加,真实客户端 IP 在最后一位(最左边可被客户端伪造)
+                String[] hops = xff.split(",");
+                String ip = hops[hops.length - 1].trim();
+                if (!ip.isBlank()) return ip;
+            }
         }
         return request.getRemoteAddr();
     }

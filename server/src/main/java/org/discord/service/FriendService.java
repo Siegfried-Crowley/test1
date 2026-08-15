@@ -5,6 +5,8 @@ import org.discord.entity.DmChannel;
 import org.discord.entity.DmChannelMember;
 import org.discord.entity.Relationship;
 import org.discord.entity.User;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.*;
 import org.discord.util.SnowflakeGenerator;
 import org.springframework.stereotype.Service;
@@ -31,17 +33,17 @@ public class FriendService {
 
     @Transactional
     public void sendFriendRequest(Long fromId, Long toId) {
-        if (fromId.equals(toId)) throw new RuntimeException("Cannot add yourself");
+        if (fromId.equals(toId)) throw new BadRequestException("Cannot add yourself");
 
-        userRepository.findById(toId).orElseThrow(() -> new RuntimeException("User not found"));
+        userRepository.findById(toId).orElseThrow(() -> new NotFoundException("User not found"));
 
         // 检查是否已经是好友
         Optional<Relationship> existing = relationshipRepository.findByFromIdAndToId(fromId, toId);
         if (existing.isPresent()) {
             if (existing.get().getType() == TYPE_FRIEND)
-                throw new RuntimeException("Already friends");
+                throw new BadRequestException("Already friends");
             if (existing.get().getType() == TYPE_BLOCKED)
-                throw new RuntimeException("Cannot send request");
+                throw new BadRequestException("Cannot send request");
         }
 
         // 删除旧关系
@@ -65,10 +67,10 @@ public class FriendService {
     public DmChannel acceptFriendRequest(Long userId, Long fromUserId) {
         Relationship incoming = relationshipRepository
                 .findByFromIdAndToId(userId, fromUserId)
-                .orElseThrow(() -> new RuntimeException("No request found"));
+                .orElseThrow(() -> new NotFoundException("No request found"));
 
         if (incoming.getType() != TYPE_INCOMING_REQUEST) {
-            throw new RuntimeException("No incoming request");
+            throw new BadRequestException("No incoming request");
         }
 
         // 更新双方关系为好友

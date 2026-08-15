@@ -6,6 +6,7 @@ import org.discord.entity.DmChannelMember;
 import org.discord.entity.Message;
 import org.discord.entity.MessageId;
 import org.discord.entity.User;
+import org.discord.exception.BadRequestException;
 import org.discord.repository.DmChannelMemberRepository;
 import org.discord.repository.DmChannelRepository;
 import org.discord.repository.MessageRepository;
@@ -54,7 +55,7 @@ public class DmService {
     @Transactional
     public Map<String, Object> openDm(Long userId, Long otherUserId) {
         if (userId.equals(otherUserId)) {
-            throw new RuntimeException("Cannot DM yourself");
+            throw new BadRequestException("Cannot DM yourself");
         }
         // 查找已存在的两人 DM
         for (DmChannelMember mine : dmMemberRepository.findByUserId(userId)) {

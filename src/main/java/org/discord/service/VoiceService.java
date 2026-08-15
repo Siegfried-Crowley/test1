@@ -3,6 +3,9 @@ package org.discord.service;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.discord.entity.*;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.*;
 import org.discord.util.SnowflakeGenerator;
 import org.discord.voice.VoiceAudioRouter;
@@ -72,23 +75,23 @@ public class VoiceService {
             allocationRepository.deleteByGuildIdAndUserId(guildId, userId);
         }
         Channel channel = channelRepository.findById(channelId)
-                .orElseThrow(() -> new RuntimeException("Voice channel not found"));
+                .orElseThrow(() -> new NotFoundException("Voice channel not found"));
 
         if (channel.getType() != 2) {
-            throw new RuntimeException("Not a voice channel");
+            throw new BadRequestException("Not a voice channel");
         }
 
         // 权限检查
         if (guildId != null) {
             GuildMember member = memberRepository
                     .findByGuildIdAndUserId(guildId, userId)
-                    .orElseThrow(() -> new RuntimeException("Not a member"));
+                    .orElseThrow(() -> new ForbiddenException("Not a member"));
             Guild guild = guildRepository.findById(guildId).orElse(null);
 
             if (guild != null) {
                 long perms = permissionService.calculateGuildPermissions(guild, member);
                 if (!permissionService.canConnectVoice(perms)) {
-                    throw new RuntimeException("Missing CONNECT permission");
+                    throw new ForbiddenException("Missing CONNECT permission");
                 }
             }
         }
@@ -108,7 +111,7 @@ public class VoiceService {
         // 分配 Voice Server
         VoiceServerInfo server = selectVoiceServer();
         if (server == null) {
-            throw new RuntimeException("No voice server available");
+            throw new BadRequestException("No voice server available");
         }
 
         int ssrc = (int)(snowflake.nextId() & 0x7FFFFFFF);

@@ -2,6 +2,7 @@ package org.discord.service;
 
 import lombok.RequiredArgsConstructor;
 import org.discord.entity.User;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,7 +17,7 @@ public class UserService {
 
     public User getUser(Long userId) {
         return userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
     }
 
     @Transactional
