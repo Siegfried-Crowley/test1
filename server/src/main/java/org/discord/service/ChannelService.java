@@ -5,6 +5,9 @@ import org.discord.entity.Channel;
 import org.discord.entity.ChannelOverwrite;
 import org.discord.entity.Guild;
 import org.discord.entity.GuildMember;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.ChannelOverwriteRepository;
 import org.discord.repository.ChannelRepository;
 import org.discord.repository.DmChannelRepository;
@@ -15,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -41,12 +45,12 @@ public class ChannelService {
     @Transactional
     public Channel createChannel(Long guildId, String name, short type, Long parentId, Long creatorId) {
         GuildMember member = guildService.getMember(guildId, creatorId);
-        if (member == null) throw new RuntimeException("Not a member");
+        if (member == null) throw new ForbiddenException("Not a member");
 
         long perms = permissionService.calculateGuildPermissions(
                 guildService.getGuild(guildId), member);
         if (!permissionService.hasPermission(perms, permissionService.MANAGE_CHANNELS)) {
-            throw new RuntimeException("Missing MANAGE_CHANNELS permission");
+            throw new ForbiddenException("Missing MANAGE_CHANNELS permission");
         }
 
         Channel channel = Channel.builder()
@@ -73,7 +77,7 @@ public class ChannelService {
 
     public Channel getChannel(Long channelId) {
         return channelRepository.findById(channelId)
-                .orElseThrow(() -> new RuntimeException("Channel not found"));
+                .orElseThrow(() -> new NotFoundException("Channel not found"));
     }
 
     @Transactional
@@ -89,9 +93,9 @@ public class ChannelService {
         if (position != null) channel.setPosition(position);
         if (parentId != null) {
             Channel parent = channelRepository.findById(parentId)
-                    .orElseThrow(() -> new RuntimeException("Parent channel not found"));
+                    .orElseThrow(() -> new NotFoundException("Parent channel not found"));
             if (!parent.getGuildId().equals(channel.getGuildId())) {
-                throw new RuntimeException("Parent not in guild");
+                throw new BadRequestException("Parent not in guild");
             }
             channel.setParentId(parentId);
         }
@@ -119,18 +123,22 @@ public class ChannelService {
 
     private void requireManageChannels(Long guildId, Long userId) {
         GuildMember member = guildService.getMember(guildId, userId);
-        if (member == null) throw new RuntimeException("Not a member");
+        if (member == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(
                 guildService.getGuild(guildId), member);
         if (!permissionService.hasPermission(perms, permissionService.MANAGE_CHANNELS)) {
-            throw new RuntimeException("Missing MANAGE_CHANNELS permission");
+            throw new ForbiddenException("Missing MANAGE_CHANNELS permission");
         }
     }
 
-    // 权限覆盖管理
+    // 权限覆盖管理 — 所有写操作必须先校验 MANAGE_CHANNELS,防止任意用户自授权限
     @Transactional
     public ChannelOverwrite createOverwrite(Long channelId, short type, Long targetId,
-                                             long allow, long deny) {
+                                             long allow, long deny, Long actorId) {
+        Channel channel = getChannel(channelId);
+        if (channel.getGuildId() != null) {
+            requireManageChannels(channel.getGuildId(), actorId);
+        }
         ChannelOverwrite ow = ChannelOverwrite.builder()
                 .channelId(channelId)
                 .type(type)
@@ -138,20 +146,35 @@ public class ChannelService {
                 .allow(allow)
                 .deny(deny)
                 .build();
-        return overwriteRepository.save(ow);
+        ChannelOverwrite saved = overwriteRepository.save(ow);
+        if (channel.getGuildId() != null) {
+            auditLogService.log(channel.getGuildId(), actorId, AuditLogService.CHANNEL_UPDATE,
+                    channelId, "Updated channel permission overwrite");
+        }
+        return saved;
     }
 
     @Transactional
-    public ChannelOverwrite updateOverwrite(Long overwriteId, Long allow, Long deny) {
+    public ChannelOverwrite updateOverwrite(Long overwriteId, Long allow, Long deny, Long actorId) {
         ChannelOverwrite ow = overwriteRepository.findById(overwriteId)
-                .orElseThrow(() -> new RuntimeException("Overwrite not found"));
+                .orElseThrow(() -> new NotFoundException("Overwrite not found"));
+        Channel channel = getChannel(ow.getChannelId());
+        if (channel.getGuildId() != null) {
+            requireManageChannels(channel.getGuildId(), actorId);
+        }
         if (allow != null) ow.setAllow(allow);
         if (deny != null) ow.setDeny(deny);
         return overwriteRepository.save(ow);
     }
 
     @Transactional
-    public void deleteOverwrite(Long overwriteId) {
+    public void deleteOverwrite(Long overwriteId, Long actorId) {
+        ChannelOverwrite ow = overwriteRepository.findById(overwriteId)
+                .orElseThrow(() -> new NotFoundException("Overwrite not found"));
+        Channel channel = getChannel(ow.getChannelId());
+        if (channel.getGuildId() != null) {
+            requireManageChannels(channel.getGuildId(), actorId);
+        }
         overwriteRepository.deleteById(overwriteId);
     }
 
@@ -167,15 +190,18 @@ public class ChannelService {
 
         long guildPerms = permissionService.calculateGuildPermissions(guild, member);
         List<Channel> channels = getGuildChannels(guildId);
-        List<ChannelOverwrite> allOverwrites = channels.stream()
-                .flatMap(c -> overwriteRepository.findByChannelId(c.getId()).stream())
-                .toList();
+
+        // 一次性批量加载全部 overwrites 并按频道分组,避免逐频道查询(N+1)
+        Map<Long, List<ChannelOverwrite>> overwriteMap =
+                overwriteRepository.findByChannelIdIn(channels.stream().map(Channel::getId).toList())
+                        .stream()
+                        .collect(java.util.stream.Collectors.groupingBy(ChannelOverwrite::getChannelId));
 
         return channels.stream()
                 .filter(c -> {
                     long channelPerms = permissionService.calculateChannelPermissions(
                             guild, member, c,
-                            overwriteRepository.findByChannelId(c.getId()),
+                            overwriteMap.getOrDefault(c.getId(), List.of()),
                             guildPerms);
                     return permissionService.canViewChannel(channelPerms, c);
                 })

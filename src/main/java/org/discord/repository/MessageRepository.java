@@ -18,9 +18,9 @@ public interface MessageRepository extends JpaRepository<Message, MessageId> {
 
     @Query("SELECT m FROM Message m WHERE m.guildId = :guildId " +
             "AND (:channelId IS NULL OR m.channelId = :channelId) " +
-            "AND m.content LIKE %:query% ORDER BY m.createdAt DESC")
+            "AND m.content LIKE :pattern ESCAPE '\\' ORDER BY m.createdAt DESC")
     List<Message> search(@Param("guildId") Long guildId,
                          @Param("channelId") Long channelId,
-                         @Param("query") String query,
+                         @Param("pattern") String pattern,
                          Pageable pageable);
 }
