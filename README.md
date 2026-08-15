@@ -79,7 +79,7 @@
 3. **确保 MySQL 已启动**（本机 3306），数据库 `discord_clone` 存在
 4. 点 ▶ **运行 Tomcat**，控制台出现 **Tomcat started** 且无报错即部署成功
 
-**验证后端**：浏览器打开以下地址，返回 **401 或 403** 都说明应用已正常启动（Spring Security 拦截了未登录请求）：
+**验证后端**：浏览器打开以下地址，返回 **401** 说明应用已正常启动（Spring Security 拦截了未登录请求，无凭证统一返回 401 JSON）：
 ```
 http://localhost:8080/discord/api/auth/me
 ```
@@ -199,7 +199,9 @@ npm start
 | 头像/资料页 | 头像上传、改用户名/签名/全局名；点任意头像看公开资料卡、发起私信 |
 | 在线状态切换 | 用户栏手动切 online/idle/dnd/offline，实时推给好友 |
 | 服务器审计日志 | 踢人/封禁/删服/角色/频道变更全程留痕，管理员可查 |
-| 限流保护 | 登录按 IP 10 次/分、发消息按用户 20 次/秒，超限 429 |
+| 限流保护 | 登录按 IP 10 次/分、发消息按用户 20 次/秒，超限 429；X-Forwarded-For 仅在显式开启 `trust-proxy` 时信任（防伪造 IP 绕过） |
+| 附件安全校验 | 上传按类型白名单（图片/音视频/PDF/文本）+ 文件头魔数校验（防伪装类型）+ 25MB 上限 + 文件名净化 |
+| 安全响应头 | 全局 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy` |
 
 ---
 
@@ -209,7 +211,7 @@ npm start
 
 | 套件 | 命令 | 覆盖 |
 |------|------|------|
-| 后端 `src/test` | `mvn test` | 登录/注册、安全配置、消息 CRUD、私信与越权、附件持久化、**邀请/加入/退出/踢人/封禁、角色 CRUD、表情回应/置顶/回复/搜索/输入中、改密/邮箱验证/2FA/登录限流、真实音频转发与静音禁听**（37 个用例） |
+| 后端 `src/test` | `mvn test` | 登录/注册、安全配置、消息 CRUD、私信与越权、附件持久化、**邀请/加入/退出/踢人/封禁、角色 CRUD、表情回应/置顶/回复/搜索/输入中、改密/邮箱验证/2FA/登录限流、真实音频转发与静音禁听、越权回归（非成员读消息/数据枚举/权限覆盖自授权/搜索通配符转义/附件魔数/未授权 401）**（45 个用例） |
 | 前端 `client/src` | `cd client && npm test` | 网关重连状态机（Identify、幂等 connect、断线 Resume、心跳 ACK）+ **语音帧协议解析/join 帧构造/MIME 探测**（18 个用例） |
 
 > 后端另有 `server/` 树（docker 部署用）也带同一套测试：`mvn -f server/pom.xml test`。
@@ -295,7 +297,9 @@ D:\IDEA DATABAS\TEST1\              # 项目根目录
 │   │   │   ├── JwtAuthFilter.java       # JWT 令牌过滤器
 │   │   │   ├── RateLimitFilter.java     # 登录按IP 10次/分、发消息按用户 20次/秒
 │   │   │   ├── WebSocketConfig.java     # Gateway + /ws/voice 注册
-│   │   │   └── RedisConfig.java         # Redis 配置
+│   │   │   ├── SecurityHeadersFilter.java # 安全响应头 (nosniff/deny/referrer)
+│   │   │   ├── GlobalExceptionHandler.java # 统一异常→JSON (类型化 ApiException)
+│   │   │   └── StaticResourceConfig.java # 静态资源映射 (uploads)
 │   │   ├── 📁 entity/                   # 📦 数据实体 (19个类)
 │   │   │   ├── User.java, Guild.java, GuildMember.java
 │   │   │   ├── Channel.java, Message.java (分区表, MessageId)
@@ -345,7 +349,7 @@ D:\IDEA DATABAS\TEST1\              # 项目根目录
 │   │       └── SnowflakeGenerator.java  # Twitter Snowflake ID
 │   │
 │   ├── 📁 src/main/resources/
-│   │   ├── 📄 application.yml           # 配置 (3个Profile: default/tomcat/prod)
+│   │   ├── 📄 application.yml           # 配置 (3个Profile: default/postgres/prod)
 │   │   ├── 📄 schema.sql                # 建表脚本
 │   │   ├── 📄 data.sql                  # H2 测试种子
 │   │   └── 📄 seed.sql                  # 3个测试用户
@@ -406,7 +410,7 @@ D:\IDEA DATABAS\TEST1\              # 项目根目录
 │   └── 📄 .env                         # 连接地址配置 (VITE_*)
 │
 ├── 📁 .github/workflows/
-│   └── 📄 ci.yml                       # 🤖 CI: 后端 mvn test + 前端 npm test
+│   └── 📄 ci.yml                       # 🤖 CI: 后端 src/server 双树 mvn test + 前端 tsc/vitest
 ├── 📄 sync.bat                         # 🔁 一键同步 src/main/java + src/test → server/
 ├── 📄 docker-compose.yml               # 🐳 一键编排所有服务
 ├── 📄 pom.xml                          # Maven 依赖 (WAR打包)
@@ -472,11 +476,10 @@ copy server\setenv.bat "C:\Program Files\Apache Software Foundation\Tomcat 10.0\
 
 # 2. 或者手动编辑 %TOMCAT_HOME%\bin\setenv.bat，内容如下：
 @echo off
-set JAVA_OPTS=%JAVA_OPTS% -Dspring.profiles.active=tomcat
+set JAVA_OPTS=%JAVA_OPTS% -Dspring.profiles.active=postgres
 set JAVA_OPTS=%JAVA_OPTS% -DDB_URL=jdbc:postgresql://localhost:5432/discord_clone
 set JAVA_OPTS=%JAVA_OPTS% -DDB_USER=discord
 set JAVA_OPTS=%JAVA_OPTS% -DDB_PASSWORD=discord_dev_2026
-set JAVA_OPTS=%JAVA_OPTS% -DREDIS_URL=redis://localhost:6379
 ```
 
 #### 构建和部署
@@ -552,7 +555,7 @@ File → Open → 选择 D:\idea databas\test1 目录
    │ Server 标签页                            │
    │   Application server: 选你的 Tomcat      │
    │   HTTP port: 8080                        │
-   │   VM options: -Dspring.profiles.active=tomcat  │
+   │   VM options: (留空,默认 profile;勿用 tomcat) │
    │                                  │
    │ Deployment 标签页                       │
    │   + → Artifact → discord-cline:war exploded    │
@@ -1172,7 +1175,7 @@ REACT_APP_API_URL=http://localhost:4001/discord
 
 ### ☑️ 1. 配置 CI（每次 push 自动跑测试）— ✅ 已完成
 
-`.github/workflows/ci.yml` 已就绪：后端 job（`setup-java@17` → `mvn test`）+ 前端 job（`setup-node@20` → `cd client && npm ci && npm test`）。
+`.github/workflows/ci.yml` 已就绪：后端双树 job（`setup-java@17` → 分别跑 `mvn test` 与 `cd server && mvn test`）+ 前端 job（`setup-node@20` → `cd client && npm ci && npx tsc --noEmit && npm test`）。
 
 项目已 `git init -b main` 并完成首次本地提交（`feat: complete Discord clone feature set`，已 gitignore `data/`、`client/.env`、`target/`、`dist/`）。**尚未 push 到 GitHub** —— 推上去后 Actions 会自动跑（这一步由你自己执行）。
 

@@ -7,7 +7,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (mvn test)
+    name: Backend src (mvn test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +18,27 @@ jobs:
           java-version: '17'
 
       # 测试用 H2 内存库,零外部依赖;现场(MySQL)与 docker(H2/PG)配置不参与 CI
-      - name: Run backend tests
+      - name: Run backend tests (src)
+        run: mvn -B test
+
+  server-tree:
+    name: Backend server tree (mvn test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # server/ 是 Docker 部署用的独立 Maven 工程(经 sync.bat 从 src 同步)
+      - name: Run backend tests (server)
+        working-directory: ./server
         run: mvn -B test
 
   frontend:
-    name: Frontend (vitest)
+    name: Frontend (tsc + vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +50,10 @@ jobs:
       - name: Install dependencies
         working-directory: ./client
         run: npm ci
+
+      - name: Type-check frontend (tsc)
+        working-directory: ./client
+        run: npx tsc --noEmit
 
       - name: Run frontend tests
         working-directory: ./client
