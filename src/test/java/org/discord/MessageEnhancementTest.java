@@ -88,6 +88,10 @@ class MessageEnhancementTest extends BaseIntegrationTest {
         String channelId = createChannel(aliceToken, guildId, "react");
         String msgId = createMessage(aliceToken, channelId, "react me");
 
+        // bob 需先加入公会才能对频道消息点赞(越权防护:非成员 403)
+        String code = createInvite(aliceToken, guildId);
+        joinGuild(bobToken, code);
+
         // RestTemplate 会自行编码路径中的非 ASCII 字符,直接传原始 emoji
         // alice + bob 各自点赞
         JsonNode add1 = send(HttpMethod.PUT,
@@ -128,10 +132,10 @@ class MessageEnhancementTest extends BaseIntegrationTest {
         String code = createInvite(aliceToken, guildId);
         joinGuild(bobToken, code);
 
-        // 普通成员置顶 → 400 Missing MANAGE_MESSAGES
+        // 普通成员置顶 → 403 Missing MANAGE_MESSAGES
         ResponseEntity<String> denied = raw(HttpMethod.PUT,
                 "/api/channels/" + channelId + "/messages/pins/" + msgId, bobToken, null);
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(parse(denied.getBody()).path("error").asText()).contains("MANAGE_MESSAGES");
 
         // owner 可置顶 → 置顶列表有该消息
@@ -190,11 +194,11 @@ class MessageEnhancementTest extends BaseIntegrationTest {
                 HttpMethod.GET, authed(aliceToken, null), String.class);
         assertThat(parse(empty.getBody()).size()).isZero();
 
-        // 非成员 → 401 Not a member
+        // 非成员 → 403 Not a member
         ResponseEntity<String> denied = rest.exchange(
                 url("/api/guilds/" + guildId + "/messages/search?query=hello"),
                 HttpMethod.GET, authed(charlieToken, null), String.class);
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(parse(denied.getBody()).path("error").asText()).contains("Not a member");
     }
 

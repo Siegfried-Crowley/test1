@@ -102,7 +102,7 @@ class InviteIntegrationTest extends BaseIntegrationTest {
                 aliceToken, Map.of("reason", "spam"));
 
         ResponseEntity<String> r = raw(HttpMethod.POST, "/api/invites/" + code + "/join", bobToken, Map.of());
-        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(parse(r.getBody()).path("error").asText()).contains("Banned from guild");
     }
 
@@ -158,14 +158,14 @@ class InviteIntegrationTest extends BaseIntegrationTest {
         // 普通成员加入后无 MANAGE_GUILD → 无权限查看
         post("/api/invites/" + code + "/join", bobToken, Map.of());
         ResponseEntity<String> denied = raw(HttpMethod.GET, "/api/guilds/" + guildId + "/invites", bobToken, null);
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
 
         // 删除邀请
         ResponseEntity<String> del = raw(HttpMethod.DELETE, "/api/invites/" + code, aliceToken, null);
         assertThat(del.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // 预览已删除邀请 → 失败
+        // 预览已删除邀请 → 404 Invite not found
         ResponseEntity<String> gone = raw(HttpMethod.GET, "/api/invites/" + code, aliceToken, null);
-        assertThat(gone.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(gone.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 }

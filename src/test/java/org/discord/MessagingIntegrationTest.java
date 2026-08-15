@@ -100,7 +100,7 @@ class MessagingIntegrationTest extends BaseIntegrationTest {
         String charlieToken = login("charlie@test.com", "test123");
         ResponseEntity<String> intrude = rest.exchange(url("/api/channels/" + dmId + "/messages"),
                 HttpMethod.POST, authed(charlieToken, Map.of("content", "intrude")), String.class);
-        assertThat(intrude.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(intrude.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test

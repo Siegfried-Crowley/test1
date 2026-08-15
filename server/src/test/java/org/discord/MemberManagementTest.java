@@ -71,7 +71,7 @@ class MemberManagementTest extends BaseIntegrationTest {
         // charlie 无 KICK_MEMBERS 权限
         ResponseEntity<String> denied = raw(HttpMethod.PUT,
                 "/api/guilds/" + guildId + "/members/1000000000000002/kick", charlieToken, Map.of());
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(parse(denied.getBody()).path("error").asText()).contains("KICK_MEMBERS");
 
         // alice(owner)踢掉 bob
@@ -128,7 +128,7 @@ class MemberManagementTest extends BaseIntegrationTest {
 
         // 非 owner 不能删公会
         ResponseEntity<String> denied = raw(HttpMethod.DELETE, "/api/guilds/" + guildId, bobToken, null);
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
 
         // owner 不能离开公会
         ResponseEntity<String> ownerLeave = raw(HttpMethod.DELETE,
@@ -146,7 +146,7 @@ class MemberManagementTest extends BaseIntegrationTest {
         assertThat(deleted.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         ResponseEntity<String> gone = raw(HttpMethod.GET, "/api/guilds/" + guildId, aliceToken, null);
-        assertThat(gone.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(gone.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
@@ -182,9 +182,9 @@ class MemberManagementTest extends BaseIntegrationTest {
     @Test
     void auditLog_requiresMembership() {
         String guildId = createGuild(aliceToken, "AuditDeny-" + System.nanoTime());
-        // bob 不是成员 → 401
+        // bob 不是成员 → 403
         ResponseEntity<String> denied = raw(HttpMethod.GET, "/api/guilds/" + guildId + "/audit-log",
                 bobToken, null);
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 }

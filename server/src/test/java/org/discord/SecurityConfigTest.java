@@ -16,15 +16,16 @@ class SecurityConfigTest extends BaseIntegrationTest {
 
     @Test
     void voiceEndpoints_requireAuthentication() {
-        // 无 token → 403（此前 /api/voice/** 被错误地 permitAll）
+        // 无 token → 401（此前 /api/voice/** 被错误地 permitAll;匿名访问统一返回 401）
         ResponseEntity<Void> r = rest.postForEntity(url("/api/voice/join"), Map.of(), Void.class);
-        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     @Test
     void protectedEndpoints_requireToken() {
+        // 无凭证 → 401
         ResponseEntity<Void> r = rest.getForEntity(url("/api/guilds"), Void.class);
-        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     @Test

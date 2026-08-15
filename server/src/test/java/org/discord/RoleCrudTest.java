@@ -84,7 +84,7 @@ class RoleCrudTest extends BaseIntegrationTest {
         post("/api/invites/" + code + "/join", bobToken, Map.of());
         ResponseEntity<String> denied = raw(HttpMethod.POST, "/api/guilds/" + guildId + "/roles",
                 bobToken, Map.of("name", "Hacker"));
-        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(denied.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(parse(denied.getBody()).path("error").asText()).contains("MANAGE_ROLES");
 
         // 删除角色
@@ -114,10 +114,10 @@ class RoleCrudTest extends BaseIntegrationTest {
                 aliceToken, Map.of("role_ids", new String[]{roleId}));
         assertThat(assign.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // 给不存在的角色分配 → 失败
+        // 给不存在的角色分配 → 404 Role not found
         ResponseEntity<String> badRole = raw(HttpMethod.PUT,
                 "/api/guilds/" + guildId + "/members/1000000000000002/roles",
                 aliceToken, Map.of("role_ids", new String[]{"9999999999999999"}));
-        assertThat(badRole.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(badRole.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 }
