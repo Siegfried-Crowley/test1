@@ -6,6 +6,9 @@ import org.discord.entity.Guild;
 import org.discord.entity.GuildBan;
 import org.discord.entity.GuildMember;
 import org.discord.entity.Invite;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.ChannelRepository;
 import org.discord.repository.GuildBanRepository;
 import org.discord.repository.InviteRepository;
@@ -46,11 +49,11 @@ public class InviteService {
     public Invite createInvite(Long guildId, Long actorId, Long channelId,
                                Integer maxUses, Integer maxAgeSeconds) {
         GuildMember member = guildService.getMember(guildId, actorId);
-        if (member == null) throw new RuntimeException("Not a member");
+        if (member == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(
                 guildService.getGuild(guildId), member);
         if (!permissionService.hasPermission(perms, permissionService.CREATE_INSTANT_INVITE)) {
-            throw new RuntimeException("Missing CREATE_INSTANT_INVITE permission");
+            throw new ForbiddenException("Missing CREATE_INSTANT_INVITE permission");
         }
 
         // 邀请必须绑定一个属于该公会的频道;未指定时取第一个频道
@@ -58,12 +61,12 @@ public class InviteService {
         if (targetChannelId == null) {
             targetChannelId = channelRepository.findByGuildIdOrderByPositionAsc(guildId).stream()
                     .findFirst().map(Channel::getId)
-                    .orElseThrow(() -> new RuntimeException("No channels in guild"));
+                    .orElseThrow(() -> new BadRequestException("No channels in guild"));
         } else {
             Channel channel = channelRepository.findById(targetChannelId)
-                    .orElseThrow(() -> new RuntimeException("Channel not found"));
+                    .orElseThrow(() -> new NotFoundException("Channel not found"));
             if (!channel.getGuildId().equals(guildId)) {
-                throw new RuntimeException("Channel not in guild");
+                throw new BadRequestException("Channel not in guild");
             }
         }
 
@@ -91,11 +94,11 @@ public class InviteService {
 
     public List<Invite> getInvites(Long guildId, Long actorId) {
         GuildMember member = guildService.getMember(guildId, actorId);
-        if (member == null) throw new RuntimeException("Not a member");
+        if (member == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(
                 guildService.getGuild(guildId), member);
         if (!permissionService.hasPermission(perms, permissionService.MANAGE_GUILD)) {
-            throw new RuntimeException("Missing MANAGE_GUILD permission");
+            throw new ForbiddenException("Missing MANAGE_GUILD permission");
         }
         return inviteRepository.findByGuildIdOrderByCreatedAtDesc(guildId);
     }
@@ -103,9 +106,9 @@ public class InviteService {
     @Transactional
     public void deleteInvite(String code, Long actorId) {
         Invite invite = inviteRepository.findById(code)
-                .orElseThrow(() -> new RuntimeException("Invite not found"));
+                .orElseThrow(() -> new NotFoundException("Invite not found"));
         GuildMember member = guildService.getMember(invite.getGuildId(), actorId);
-        if (member == null) throw new RuntimeException("Not a member");
+        if (member == null) throw new ForbiddenException("Not a member");
 
         Guild guild = guildService.getGuild(invite.getGuildId());
         boolean isCreator = invite.getInviterId().equals(actorId);
@@ -113,7 +116,7 @@ public class InviteService {
         if (!isCreator && !isOwner) {
             long perms = permissionService.calculateGuildPermissions(guild, member);
             if (!permissionService.hasPermission(perms, permissionService.MANAGE_GUILD)) {
-                throw new RuntimeException("No permission");
+                throw new ForbiddenException("No permission");
             }
         }
         inviteRepository.delete(invite);
@@ -121,14 +124,14 @@ public class InviteService {
 
     public Invite getInvite(String code) {
         return inviteRepository.findById(code)
-                .orElseThrow(() -> new RuntimeException("Invite not found"));
+                .orElseThrow(() -> new NotFoundException("Invite not found"));
     }
 
     /** 加入前预览:返回公会/频道摘要(过期邀请不可预览) */
     public Map<String, Object> getInvitePreview(String code) {
         Invite invite = getInvite(code);
         if (invite.getExpiresAt() != null && invite.getExpiresAt().isBefore(Instant.now())) {
-            throw new RuntimeException("Invite expired");
+            throw new BadRequestException("Invite expired");
         }
         Guild guild = guildService.getGuild(invite.getGuildId());
         Channel channel = channelRepository.findById(invite.getChannelId()).orElse(null);
@@ -147,21 +150,21 @@ public class InviteService {
     @Transactional
     public Invite joinInvite(String code, Long userId) {
         Invite invite = inviteRepository.findById(code)
-                .orElseThrow(() -> new RuntimeException("Invite not found"));
+                .orElseThrow(() -> new NotFoundException("Invite not found"));
 
         // 过期校验
         if (invite.getExpiresAt() != null && invite.getExpiresAt().isBefore(Instant.now())) {
             inviteRepository.delete(invite);
-            throw new RuntimeException("Invite expired");
+            throw new BadRequestException("Invite expired");
         }
         // 次数上限
         if (invite.getMaxUses() != null && invite.getMaxUses() > 0
                 && invite.getUses() != null && invite.getUses() >= invite.getMaxUses()) {
-            throw new RuntimeException("Invite max uses reached");
+            throw new BadRequestException("Invite max uses reached");
         }
         // 被 ban 不可加入
         if (banRepository.findByGuildIdAndUserId(invite.getGuildId(), userId).isPresent()) {
-            throw new RuntimeException("Banned from guild");
+            throw new ForbiddenException("Banned from guild");
         }
         // 加入(已是成员会抛 "Already a member")
         guildService.addMember(invite.getGuildId(), userId);

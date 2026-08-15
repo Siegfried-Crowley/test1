@@ -27,8 +27,10 @@ public class MessageController {
             @PathVariable Long channelId,
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(required = false) Long before,
-            @RequestParam(required = false) Long after) {
-        List<Message> messages = messageService.getMessages(channelId, limit, before, after);
+            @RequestParam(required = false) Long after,
+            Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        List<Message> messages = messageService.getMessages(channelId, userId, limit, before, after);
         List<Map<String, Object>> result = messages.stream()
                 .map(messageService::toJson)
                 .toList();
@@ -112,8 +114,10 @@ public class MessageController {
     // ========== 置顶 ==========
 
     @GetMapping("/pins")
-    public ResponseEntity<List<Map<String, Object>>> getPins(@PathVariable Long channelId) {
-        List<Map<String, Object>> result = messageService.getPinnedMessages(channelId).stream()
+    public ResponseEntity<List<Map<String, Object>>> getPins(@PathVariable Long channelId,
+                                                              Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        List<Map<String, Object>> result = messageService.getPinnedMessages(channelId, userId).stream()
                 .map(messageService::toJson).toList();
         return ResponseEntity.ok(result);
     }

@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.discord.entity.Channel;
 import org.discord.entity.DmChannel;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
 import org.discord.entity.Guild;
 import org.discord.entity.GuildMember;
 import org.discord.entity.Message;
@@ -49,6 +52,7 @@ public class MessageService {
     private final GuildMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final ChannelAccessService channelAccess;
     private final SnowflakeGenerator snowflake;
     private final ObjectMapper objectMapper;
 
@@ -67,27 +71,11 @@ public class MessageService {
 
         if (channel == null) {
             dmChannel = dmChannelRepository.findById(channelId)
-                    .orElseThrow(() -> new RuntimeException("Channel not found"));
-            // DM：校验发送者是该 DM 频道成员
-            boolean isMember = dmChannelRepository.existsById(channelId)
-                    && channelMembershipAllowed(channelId, authorId);
-            if (!isMember) {
-                throw new RuntimeException("No permission");
-            }
-        } else {
-            // 权限校验 (对 guild channel)
-            if (channel.getGuildId() != null) {
-                Guild guild = guildRepository.findById(channel.getGuildId()).orElse(null);
-                GuildMember member = memberRepository
-                        .findByGuildIdAndUserId(channel.getGuildId(), authorId).orElse(null);
-                if (member != null && guild != null) {
-                    long perms = permissionService.calculateGuildPermissions(guild, member);
-                    if (!permissionService.hasPermission(perms, permissionService.SEND_MESSAGES)) {
-                        throw new RuntimeException("Missing SEND_MESSAGES permission");
-                    }
-                }
-            }
+                    .orElseThrow(() -> new NotFoundException("Channel not found"));
         }
+
+        // 统一授权校验：DM 需为频道成员；公会频道需为成员且具备频道级 SEND_MESSAGES
+        channelAccess.requireSendMessages(channelId, authorId);
 
         // 去重：检查 nonce
         if (nonce != null && !nonce.isEmpty()) {
@@ -138,8 +126,7 @@ public class MessageService {
     }
 
     private boolean channelMembershipAllowed(Long channelId, Long userId) {
-        return dmMemberRepository.findByChannelId(channelId).stream()
-                .anyMatch(m -> m.getUserId().equals(userId));
+        return channelAccess.isDmMember(channelId, userId);
     }
 
     /** 解析消息中的 @everyone 与 @昵称/@用户名 提及,写入 mentions JSON 与 mentionEveryone 字段 */
@@ -192,6 +179,7 @@ public class MessageService {
 
     @Transactional
     public Message addReaction(Long channelId, Long messageId, Long userId, String emoji) {
+        channelAccess.requireChannelAccess(channelId, userId);
         Message message = requireMessage(channelId, messageId);
         Map<String, List<String>> reactions = parseReactions(message.getReactions());
         List<String> users = reactions.computeIfAbsent(emoji, k -> new ArrayList<>());
@@ -204,6 +192,7 @@ public class MessageService {
 
     @Transactional
     public Message removeReaction(Long channelId, Long messageId, Long userId, String emoji) {
+        channelAccess.requireChannelAccess(channelId, userId);
         Message message = requireMessage(channelId, messageId);
         Map<String, List<String>> reactions = parseReactions(message.getReactions());
         List<String> users = reactions.get(emoji);
@@ -233,23 +222,25 @@ public class MessageService {
         return messageRepository.save(message);
     }
 
-    public List<Message> getPinnedMessages(Long channelId) {
+    public List<Message> getPinnedMessages(Long channelId, Long userId) {
+        channelAccess.requireChannelAccess(channelId, userId);
         return messageRepository.findByChannelIdAndPinnedTrueOrderByCreatedAtDesc(channelId);
     }
 
     private void requireManageMessages(Message message, Long userId) {
         if (message.getGuildId() == null) {
-            throw new RuntimeException("No permission");
+            throw new ForbiddenException("No permission");
         }
+        channelAccess.requireGuildMember(message.getGuildId(), userId);
         Guild guild = guildRepository.findById(message.getGuildId()).orElse(null);
         GuildMember member = memberRepository
                 .findByGuildIdAndUserId(message.getGuildId(), userId).orElse(null);
         if (guild == null || member == null) {
-            throw new RuntimeException("No permission");
+            throw new ForbiddenException("No permission");
         }
         long perms = permissionService.calculateGuildPermissions(guild, member);
         if (!permissionService.hasPermission(perms, permissionService.MANAGE_MESSAGES)) {
-            throw new RuntimeException("Missing MANAGE_MESSAGES permission");
+            throw new ForbiddenException("Missing MANAGE_MESSAGES permission");
         }
     }
 
@@ -257,47 +248,34 @@ public class MessageService {
 
     /** 校验发送者是否有权在频道输入(有 SEND_MESSAGES 或为 DM 成员) */
     public void validateTyping(Long channelId, Long userId) {
-        Channel channel = channelRepository.findById(channelId).orElse(null);
-        if (channel == null) {
-            if (!channelMembershipAllowed(channelId, userId)) {
-                throw new RuntimeException("No permission");
-            }
-            return;
-        }
-        if (channel.getGuildId() == null) return;
-        Guild guild = guildRepository.findById(channel.getGuildId()).orElse(null);
-        GuildMember member = memberRepository
-                .findByGuildIdAndUserId(channel.getGuildId(), userId).orElse(null);
-        if (guild != null && member != null) {
-            long perms = permissionService.calculateGuildPermissions(guild, member);
-            if (!permissionService.hasPermission(perms, permissionService.SEND_MESSAGES)) {
-                throw new RuntimeException("Missing SEND_MESSAGES permission");
-            }
-        }
+        channelAccess.requireSendMessages(channelId, userId);
     }
 
     // ========== 搜索 (Search) ==========
 
     public List<Message> searchMessages(Long guildId, Long channelId, String query, Long userId) {
-        memberRepository.findByGuildIdAndUserId(guildId, userId)
-                .orElseThrow(() -> new RuntimeException("Not a member"));
+        channelAccess.requireGuildMember(guildId, userId);
         if (channelId != null) {
             Channel channel = channelRepository.findById(channelId)
-                    .orElseThrow(() -> new RuntimeException("Channel not found"));
+                    .orElseThrow(() -> new NotFoundException("Channel not found"));
             if (!channel.getGuildId().equals(guildId)) {
-                throw new RuntimeException("Channel not in guild");
+                throw new BadRequestException("Channel not in guild");
             }
+            // 只能搜索有权限查看的频道
+            channelAccess.requireChannelAccess(channelId, userId);
         }
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return List.of();
-        return messageRepository.search(guildId, channelId, q, PageRequest.of(0, 50));
+        // 转义 LIKE 通配符,防止用户输入 % _ 被当作通配符(既影响结果又可能被滥用)
+        String escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return messageRepository.search(guildId, channelId, "%" + escaped + "%", PageRequest.of(0, 50));
     }
 
     // ========== 工具 ==========
 
     private Message requireMessage(Long channelId, Long messageId) {
         return messageRepository.findById(new MessageId(channelId, messageId))
-                .orElseThrow(() -> new RuntimeException("Message not found"));
+                .orElseThrow(() -> new NotFoundException("Message not found"));
     }
 
     private Map<String, List<String>> parseReactions(String json) {
@@ -321,7 +299,9 @@ public class MessageService {
         }
     }
 
-    public List<Message> getMessages(Long channelId, int limit, Long before, Long after) {
+    public List<Message> getMessages(Long channelId, Long userId, int limit, Long before, Long after) {
+        // 读取消息历史必须先通过频道访问校验(公会成员 + VIEW_CHANNEL,或 DM 成员)
+        channelAccess.requireChannelAccess(channelId, userId);
         if (before != null) {
             return messageRepository
                     .findByChannelIdAndIdLessThanOrderByCreatedAtDesc(
@@ -338,10 +318,10 @@ public class MessageService {
     @Transactional
     public Message updateMessage(Long channelId, Long messageId, Long userId, String content) {
         Message message = messageRepository.findById(new MessageId(channelId, messageId))
-                .orElseThrow(() -> new RuntimeException("Message not found"));
+                .orElseThrow(() -> new NotFoundException("Message not found"));
 
         if (!message.getAuthorId().equals(userId)) {
-            throw new RuntimeException("Cannot edit another user's message");
+            throw new ForbiddenException("Cannot edit another user's message");
         }
 
         message.setContent(content);
@@ -352,7 +332,7 @@ public class MessageService {
     @Transactional
     public void deleteMessage(Long channelId, Long messageId, Long userId) {
         Message message = messageRepository.findById(new MessageId(channelId, messageId))
-                .orElseThrow(() -> new RuntimeException("Message not found"));
+                .orElseThrow(() -> new NotFoundException("Message not found"));
 
         // 允许作者或管理员删除
         if (!message.getAuthorId().equals(userId)) {
@@ -361,14 +341,14 @@ public class MessageService {
                 GuildMember member = memberRepository
                         .findByGuildIdAndUserId(message.getGuildId(), userId).orElse(null);
                 if (member == null || guild == null) {
-                    throw new RuntimeException("No permission");
+                    throw new ForbiddenException("No permission");
                 }
                 long perms = permissionService.calculateGuildPermissions(guild, member);
                 if (!permissionService.hasPermission(perms, permissionService.MANAGE_MESSAGES)) {
-                    throw new RuntimeException("Missing MANAGE_MESSAGES permission");
+                    throw new ForbiddenException("Missing MANAGE_MESSAGES permission");
                 }
             } else {
-                throw new RuntimeException("Cannot delete another user's message");
+                throw new ForbiddenException("Cannot delete another user's message");
             }
         }
 

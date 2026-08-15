@@ -344,6 +344,11 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
     private void handleRequestGuildMembers(GatewaySession session, JsonNode data) {
         try {
             Long guildId = data.get("guild_id").asLong();
+            // 越权防护:仅公会成员可拉取成员列表
+            if (session.userId == null || guildService.getMember(guildId, session.userId) == null) {
+                send(session.ws, error("Not a member of this guild", 4004));
+                return;
+            }
             List<GuildMember> members = guildService.getGuildMembers(guildId);
 
             List<Map<String, Object>> memberList = new ArrayList<>();
@@ -432,14 +437,14 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
 
         // DM 频道：只发给该 DM 的参与者；公会频道：发给所有在线会话
         boolean isDm = dmChannelRepository.existsById(channelId);
+        // 预先取出 DM 参与者,避免对每个在线会话重复查库(N+1)
+        Set<Long> dmMemberIds = isDm ? dmMemberRepository.findByChannelId(channelId).stream()
+                .map(DmChannelMember::getUserId).collect(java.util.stream.Collectors.toSet())
+                : Collections.emptySet();
 
         for (GatewaySession session : sessions.values()) {
             if (session.status != GatewayStatus.READY || !session.ws.isOpen() || session.userId == null) continue;
-            if (isDm) {
-                boolean inDm = dmMemberRepository.findByChannelId(channelId).stream()
-                        .anyMatch(m -> m.getUserId().equals(session.userId));
-                if (!inDm) continue;
-            }
+            if (isDm && !dmMemberIds.contains(session.userId)) continue;
             sendRaw(session.ws, payload);
         }
     }
@@ -458,15 +463,29 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
         }
-        // DM 频道: 仅向参与者广播
+        // DM 频道: 仅向参与者广播(参与者集合预先取一次,避免逐会话查库)
         String payload = toJsonString(buildMessage(GatewayMessage.OP_DISPATCH, data, eventName, 0));
+        Set<Long> dmMemberIds = dmMemberRepository.findByChannelId(channelId).stream()
+                .map(DmChannelMember::getUserId).collect(java.util.stream.Collectors.toSet());
         for (GatewaySession session : sessions.values()) {
             if (session.status != GatewayStatus.READY || !session.ws.isOpen()
                     || session.userId == null || session.userId.equals(excludeUserId)) continue;
-            boolean inDm = dmMemberRepository.findByChannelId(channelId).stream()
-                    .anyMatch(m -> m.getUserId().equals(session.userId));
-            if (inDm) {
+            if (dmMemberIds.contains(session.userId)) {
                 try { sendRaw(session.ws, payload); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /**
+     * 用户加入/离开/被移出公会时刷新其在线会话的 guildIds,
+     * 避免会话在 Identify 时缓存的老集合导致广播漏发或误发。
+     */
+    public void refreshUserGuilds(Long userId) {
+        if (userId == null) return;
+        for (GatewaySession session : sessions.values()) {
+            if (session.userId != null && session.userId.equals(userId)) {
+                session.guildIds = new HashSet<>(guildService.getUserGuilds(userId).stream()
+                        .map(Guild::getId).toList());
             }
         }
     }
@@ -486,6 +505,17 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
                         session.userId.toString(), java.time.Duration.ofSeconds(30));
             }
             sessionById.remove(session.sessionId);
+
+            // 断连清理:若该用户在这些公会有语音状态,一并摘除,避免残留脏状态
+            if (session.userId != null) {
+                for (Long guildId : session.guildIds) {
+                    try {
+                        voiceService.leaveVoice(guildId, session.userId);
+                    } catch (Exception e) {
+                        log.warn("Voice cleanup failed guild={} user={}", guildId, session.userId, e);
+                    }
+                }
+            }
         }
     }
 

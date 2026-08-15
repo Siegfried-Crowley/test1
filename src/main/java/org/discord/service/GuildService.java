@@ -2,6 +2,9 @@ package org.discord.service;
 
 import lombok.RequiredArgsConstructor;
 import org.discord.entity.*;
+import org.discord.exception.BadRequestException;
+import org.discord.exception.ForbiddenException;
+import org.discord.exception.NotFoundException;
 import org.discord.repository.*;
 import org.discord.util.SnowflakeGenerator;
 import org.springframework.stereotype.Service;
@@ -104,7 +107,7 @@ public class GuildService {
 
     public Guild getGuild(Long guildId) {
         return guildRepository.findById(guildId)
-                .orElseThrow(() -> new RuntimeException("Guild not found"));
+                .orElseThrow(() -> new NotFoundException("Guild not found"));
     }
 
     public List<Guild> getUserGuilds(Long userId) {
@@ -122,7 +125,7 @@ public class GuildService {
     @Transactional
     public GuildMember addMember(Long guildId, Long userId) {
         if (memberRepository.existsByGuildIdAndUserId(guildId, userId)) {
-            throw new RuntimeException("Already a member");
+            throw new BadRequestException("Already a member");
         }
         GuildMember member = GuildMember.builder()
                 .guildId(guildId)
@@ -161,7 +164,7 @@ public class GuildService {
     /** 返回某成员在公会中已分配的角色(含 @everyone) */
     public List<Role> getMemberRoles(Long guildId, Long userId) {
         if (getMember(guildId, userId) == null) {
-            throw new RuntimeException("Member not found");
+            throw new NotFoundException("Member not found");
         }
         Set<Long> assignedIds = memberRoleRepository.findByGuildIdAndUserId(guildId, userId).stream()
                 .map(MemberRole::getRoleId)
@@ -195,7 +198,7 @@ public class GuildService {
     public void deleteGuild(Long guildId, Long actorId) {
         Guild guild = getGuild(guildId);
         if (!guild.getOwnerId().equals(actorId)) {
-            throw new RuntimeException("No permission");
+            throw new ForbiddenException("No permission");
         }
         // 清理语音状态(成员离开语音频道)
         for (GuildMember m : memberRepository.findByGuildId(guildId)) {
@@ -221,10 +224,10 @@ public class GuildService {
     public void leaveGuild(Long guildId, Long userId) {
         Guild guild = getGuild(guildId);
         if (guild.getOwnerId().equals(userId)) {
-            throw new RuntimeException("Owner cannot leave; transfer or delete");
+            throw new BadRequestException("Owner cannot leave; transfer or delete");
         }
         if (getMember(guildId, userId) == null) {
-            throw new RuntimeException("Not a member");
+            throw new ForbiddenException("Not a member");
         }
         voiceStateRepository.findByGuildIdAndUserId(guildId, userId)
                 .ifPresent(vs -> voiceService.leaveVoice(guildId, userId));
@@ -237,16 +240,16 @@ public class GuildService {
     public void kickMember(Long guildId, Long targetUserId, Long actorId) {
         Guild guild = getGuild(guildId);
         if (guild.getOwnerId().equals(targetUserId)) {
-            throw new RuntimeException("Cannot kick the owner");
+            throw new BadRequestException("Cannot kick the owner");
         }
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(guild, actor);
         if (!permissionService.canKick(perms)) {
-            throw new RuntimeException("Missing KICK_MEMBERS permission");
+            throw new ForbiddenException("Missing KICK_MEMBERS permission");
         }
         if (getMember(guildId, targetUserId) == null) {
-            throw new RuntimeException("Member not found");
+            throw new NotFoundException("Member not found");
         }
         voiceStateRepository.findByGuildIdAndUserId(guildId, targetUserId)
                 .ifPresent(vs -> voiceService.leaveVoice(guildId, targetUserId));
@@ -260,13 +263,13 @@ public class GuildService {
     public GuildBan banMember(Long guildId, Long targetUserId, Long actorId, String reason) {
         Guild guild = getGuild(guildId);
         if (guild.getOwnerId().equals(targetUserId)) {
-            throw new RuntimeException("Cannot ban the owner");
+            throw new BadRequestException("Cannot ban the owner");
         }
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(guild, actor);
         if (!permissionService.canBan(perms)) {
-            throw new RuntimeException("Missing BAN_MEMBERS permission");
+            throw new ForbiddenException("Missing BAN_MEMBERS permission");
         }
         GuildBan ban = banRepository.save(GuildBan.builder()
                 .guildId(guildId)
@@ -289,13 +292,13 @@ public class GuildService {
     @Transactional
     public void unbanMember(Long guildId, Long targetUserId, Long actorId) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.canBan(perms)) {
-            throw new RuntimeException("Missing BAN_MEMBERS permission");
+            throw new ForbiddenException("Missing BAN_MEMBERS permission");
         }
         banRepository.findByGuildIdAndUserId(guildId, targetUserId)
-                .orElseThrow(() -> new RuntimeException("Ban not found"));
+                .orElseThrow(() -> new NotFoundException("Ban not found"));
         banRepository.deleteByGuildIdAndUserId(guildId, targetUserId);
         auditLogService.log(guildId, actorId, AuditLogService.MEMBER_UNBAN, targetUserId,
                 "Unbanned member " + targetUserId);
@@ -303,10 +306,10 @@ public class GuildService {
 
     public List<GuildBan> getBans(Long guildId, Long actorId) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.canBan(perms)) {
-            throw new RuntimeException("Missing BAN_MEMBERS permission");
+            throw new ForbiddenException("Missing BAN_MEMBERS permission");
         }
         return banRepository.findByGuildId(guildId);
     }
@@ -315,17 +318,17 @@ public class GuildService {
     public GuildMember updateNickname(Long guildId, Long targetUserId, Long actorId, String nickname) {
         Guild guild = getGuild(guildId);
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         GuildMember target = getMember(guildId, targetUserId);
-        if (target == null) throw new RuntimeException("Member not found");
+        if (target == null) throw new NotFoundException("Member not found");
 
         boolean self = targetUserId.equals(actorId);
         long perms = permissionService.calculateGuildPermissions(guild, actor);
         if (!self && !permissionService.hasPermission(perms, permissionService.MANAGE_NICKNAMES)) {
-            throw new RuntimeException("Missing MANAGE_NICKNAMES permission");
+            throw new ForbiddenException("Missing MANAGE_NICKNAMES permission");
         }
         if (self && !permissionService.hasPermission(perms, permissionService.CHANGE_NICKNAME)) {
-            throw new RuntimeException("Missing CHANGE_NICKNAME permission");
+            throw new ForbiddenException("Missing CHANGE_NICKNAME permission");
         }
         if (nickname != null && nickname.isBlank()) nickname = null;
         target.setNickname(nickname);
@@ -339,12 +342,12 @@ public class GuildService {
     public Guild updateGuild(Long guildId, Long actorId, String name, String icon) {
         Guild guild = getGuild(guildId);
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         boolean isOwner = guild.getOwnerId().equals(actorId);
         if (!isOwner) {
             long perms = permissionService.calculateGuildPermissions(guild, actor);
             if (!permissionService.hasPermission(perms, permissionService.MANAGE_GUILD)) {
-                throw new RuntimeException("Missing MANAGE_GUILD permission");
+                throw new ForbiddenException("Missing MANAGE_GUILD permission");
             }
         }
         if (name != null && !name.isBlank()) guild.setName(name);
@@ -361,10 +364,10 @@ public class GuildService {
     public Role createRole(Long guildId, Long actorId, String name, Integer color, boolean hoist,
                            Long permissions, boolean mentionable) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.canManageRoles(perms)) {
-            throw new RuntimeException("Missing MANAGE_ROLES permission");
+            throw new ForbiddenException("Missing MANAGE_ROLES permission");
         }
         int maxPos = roleRepository.findByGuildIdOrderByPositionAsc(guildId).stream()
                 .mapToInt(r -> r.getPosition() != null ? r.getPosition() : 0)
@@ -390,20 +393,20 @@ public class GuildService {
     public Role updateRole(Long guildId, Long roleId, Long actorId, String name, Integer color,
                            Boolean hoist, Long permissions, Boolean mentionable) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.canManageRoles(perms)) {
-            throw new RuntimeException("Missing MANAGE_ROLES permission");
+            throw new ForbiddenException("Missing MANAGE_ROLES permission");
         }
         Role role = roleRepository.findById(roleId)
-                .orElseThrow(() -> new RuntimeException("Role not found"));
+                .orElseThrow(() -> new NotFoundException("Role not found"));
         if (!role.getGuildId().equals(guildId)) {
-            throw new RuntimeException("Role not in guild");
+            throw new BadRequestException("Role not in guild");
         }
         if (role.getId().equals(guildId)) {
             // @everyone 名字不可改
             if (name != null && !name.isBlank()) {
-                throw new RuntimeException("@everyone name is fixed");
+                throw new BadRequestException("@everyone name is fixed");
             }
         }
         if (name != null && !name.isBlank()) role.setName(name);
@@ -420,18 +423,18 @@ public class GuildService {
     @Transactional
     public void deleteRole(Long guildId, Long roleId, Long actorId) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.canManageRoles(perms)) {
-            throw new RuntimeException("Missing MANAGE_ROLES permission");
+            throw new ForbiddenException("Missing MANAGE_ROLES permission");
         }
         Role role = roleRepository.findById(roleId)
-                .orElseThrow(() -> new RuntimeException("Role not found"));
+                .orElseThrow(() -> new NotFoundException("Role not found"));
         if (!role.getGuildId().equals(guildId)) {
-            throw new RuntimeException("Role not in guild");
+            throw new BadRequestException("Role not in guild");
         }
         if (role.getId().equals(guildId)) {
-            throw new RuntimeException("Cannot delete @everyone role");
+            throw new BadRequestException("Cannot delete @everyone role");
         }
         memberRoleRepository.deleteByRoleId(roleId);
         roleRepository.delete(role);
@@ -442,20 +445,20 @@ public class GuildService {
     @Transactional
     public void assignRoles(Long guildId, Long userId, Long actorId, List<Long> roleIds) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!permissionService.hasPermission(perms, permissionService.MANAGE_ROLES)) {
-            throw new RuntimeException("Missing MANAGE_ROLES permission");
+            throw new ForbiddenException("Missing MANAGE_ROLES permission");
         }
         if (getMember(guildId, userId) == null) {
-            throw new RuntimeException("Member not found");
+            throw new NotFoundException("Member not found");
         }
         // 校验角色都属于该公会
         for (Long roleId : roleIds) {
             Role role = roleRepository.findById(roleId)
-                    .orElseThrow(() -> new RuntimeException("Role not found"));
+                    .orElseThrow(() -> new NotFoundException("Role not found"));
             if (!role.getGuildId().equals(guildId)) {
-                throw new RuntimeException("Role not in guild");
+                throw new BadRequestException("Role not in guild");
             }
         }
         updateMemberRoles(guildId, userId, roleIds);
@@ -463,11 +466,11 @@ public class GuildService {
 
     public List<Map<String, Object>> getAuditLog(Long guildId, Long actorId) {
         GuildMember actor = getMember(guildId, actorId);
-        if (actor == null) throw new RuntimeException("Not a member");
+        if (actor == null) throw new ForbiddenException("Not a member");
         boolean isOwner = getGuild(guildId).getOwnerId().equals(actorId);
         long perms = permissionService.calculateGuildPermissions(getGuild(guildId), actor);
         if (!isOwner && !permissionService.hasPermission(perms, permissionService.VIEW_AUDIT_LOG)) {
-            throw new RuntimeException("No permission to view audit log");
+            throw new ForbiddenException("No permission to view audit log");
         }
         return auditLogService.getLog(guildId);
     }

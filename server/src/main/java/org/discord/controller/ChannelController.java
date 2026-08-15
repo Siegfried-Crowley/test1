@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.discord.entity.Channel;
 import org.discord.entity.ChannelOverwrite;
 import org.discord.gateway.GatewayWebSocketHandler;
+import org.discord.service.ChannelAccessService;
 import org.discord.service.ChannelService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -16,6 +17,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ChannelController {
     private final ChannelService channelService;
+    private final ChannelAccessService channelAccess;
     private final GatewayWebSocketHandler gatewayHandler;
 
     @PostMapping
@@ -35,7 +37,11 @@ public class ChannelController {
     }
 
     @GetMapping("/{channelId}")
-    public ResponseEntity<Map<String, Object>> getChannel(@PathVariable Long channelId) {
+    public ResponseEntity<Map<String, Object>> getChannel(@PathVariable Long channelId,
+                                                          Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        // 查看频道详情前先做访问校验(DM 成员 / 公会成员 + VIEW_CHANNEL)
+        channelAccess.requireChannelAccess(channelId, userId);
         Channel channel = channelService.getChannel(channelId);
         return ResponseEntity.ok(Map.of(
                 "id", channel.getId().toString(),
@@ -98,7 +104,14 @@ public class ChannelController {
 
     // 权限覆盖管理
     @GetMapping("/{channelId}/permissions")
-    public ResponseEntity<List<Map<String, Object>>> listOverwrites(@PathVariable Long channelId) {
+    public ResponseEntity<List<Map<String, Object>>> listOverwrites(@PathVariable Long channelId,
+                                                                     Authentication auth) {
+        Long actorId = (Long) auth.getPrincipal();
+        Channel channel = channelService.getChannel(channelId);
+        // 覆盖列表属于权限管理信息:仅允许具备 MANAGE_CHANNELS 的用户查看
+        if (channel.getGuildId() != null) {
+            channelAccess.requireManageChannels(channel.getGuildId(), actorId);
+        }
         List<Map<String, Object>> result = channelService.getOverwrites(channelId).stream()
                 .map(ow -> Map.<String, Object>of(
                         "id", ow.getId(),
@@ -115,12 +128,14 @@ public class ChannelController {
     @PostMapping("/{channelId}/permissions")
     public ResponseEntity<Map<String, Object>> createOverwrite(
             @PathVariable Long channelId,
-            @RequestBody Map<String, Object> body) {
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        Long actorId = (Long) auth.getPrincipal();
         short type = body.get("type") != null ? ((Number) body.get("type")).shortValue() : 0;
         Long targetId = Long.parseLong(body.get("target_id").toString());
         long allow = body.get("allow") != null ? Long.parseLong(body.get("allow").toString()) : 0L;
         long deny = body.get("deny") != null ? Long.parseLong(body.get("deny").toString()) : 0L;
-        ChannelOverwrite ow = channelService.createOverwrite(channelId, type, targetId, allow, deny);
+        ChannelOverwrite ow = channelService.createOverwrite(channelId, type, targetId, allow, deny, actorId);
         return ResponseEntity.ok(Map.of(
                 "id", ow.getId(),
                 "channel_id", ow.getChannelId().toString(),
@@ -135,10 +150,12 @@ public class ChannelController {
     public ResponseEntity<Map<String, Object>> updateOverwrite(
             @PathVariable Long channelId,
             @PathVariable Long overwriteId,
-            @RequestBody Map<String, Object> body) {
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        Long actorId = (Long) auth.getPrincipal();
         Long allow = body.get("allow") != null ? Long.parseLong(body.get("allow").toString()) : null;
         Long deny = body.get("deny") != null ? Long.parseLong(body.get("deny").toString()) : null;
-        ChannelOverwrite ow = channelService.updateOverwrite(overwriteId, allow, deny);
+        ChannelOverwrite ow = channelService.updateOverwrite(overwriteId, allow, deny, actorId);
         return ResponseEntity.ok(Map.of(
                 "id", ow.getId(),
                 "channel_id", ow.getChannelId().toString(),
@@ -148,8 +165,10 @@ public class ChannelController {
     }
 
     @DeleteMapping("/{channelId}/permissions/{overwriteId}")
-    public ResponseEntity<Void> deleteOverwrite(@PathVariable Long overwriteId) {
-        channelService.deleteOverwrite(overwriteId);
+    public ResponseEntity<Void> deleteOverwrite(@PathVariable Long overwriteId,
+                                                Authentication auth) {
+        Long actorId = (Long) auth.getPrincipal();
+        channelService.deleteOverwrite(overwriteId, actorId);
         return ResponseEntity.ok().build();
     }
 }

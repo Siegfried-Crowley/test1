@@ -62,6 +62,9 @@ public class InviteController {
         Long userId = (Long) auth.getPrincipal();
         Invite invite = inviteService.joinInvite(code, userId);
 
+        // 加入成功后刷新该用户在线会话缓存的公会集合,否则新公会收不到后续广播
+        gatewayHandler.refreshUserGuilds(userId);
+
         // 广播 GUILD_MEMBER_ADD
         Map<String, Object> addData = new HashMap<>();
         addData.put("guild_id", invite.getGuildId().toString());

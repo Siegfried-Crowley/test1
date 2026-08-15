@@ -3,6 +3,7 @@ package org.discord.controller;
 import lombok.RequiredArgsConstructor;
 import org.discord.entity.*;
 import org.discord.gateway.GatewayWebSocketHandler;
+import org.discord.service.ChannelAccessService;
 import org.discord.service.GuildService;
 import org.discord.service.ChannelService;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ import java.util.*;
 public class GuildController {
     private final GuildService guildService;
     private final ChannelService channelService;
+    private final ChannelAccessService channelAccess;
     private final GatewayWebSocketHandler gatewayHandler;
 
     @PostMapping
@@ -48,7 +50,10 @@ public class GuildController {
     }
 
     @GetMapping("/{guildId}")
-    public ResponseEntity<Map<String, Object>> getGuild(@PathVariable Long guildId) {
+    public ResponseEntity<Map<String, Object>> getGuild(@PathVariable Long guildId,
+                                                        Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        channelAccess.requireGuildMember(guildId, userId);
         Guild guild = guildService.getGuild(guildId);
         return ResponseEntity.ok(Map.of(
                 "id", guild.getId().toString(),
@@ -80,7 +85,10 @@ public class GuildController {
     }
 
     @GetMapping("/{guildId}/members")
-    public ResponseEntity<List<Map<String, Object>>> getMembers(@PathVariable Long guildId) {
+    public ResponseEntity<List<Map<String, Object>>> getMembers(@PathVariable Long guildId,
+                                                                Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        channelAccess.requireGuildMember(guildId, userId);
         List<GuildMember> members = guildService.getGuildMembers(guildId);
         List<Map<String, Object>> result = members.stream().map(m -> {
             Map<String, Object> map = new HashMap<>();
@@ -93,7 +101,10 @@ public class GuildController {
     }
 
     @GetMapping("/{guildId}/roles")
-    public ResponseEntity<List<Map<String, Object>>> getRoles(@PathVariable Long guildId) {
+    public ResponseEntity<List<Map<String, Object>>> getRoles(@PathVariable Long guildId,
+                                                              Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        channelAccess.requireGuildMember(guildId, userId);
         List<Role> roles = guildService.getGuildRoles(guildId);
         List<Map<String, Object>> result = roles.stream().map(this::roleToJson).toList();
         return ResponseEntity.ok(result);
@@ -130,6 +141,7 @@ public class GuildController {
     public ResponseEntity<Void> leaveGuild(@PathVariable Long guildId, Authentication auth) {
         Long userId = (Long) auth.getPrincipal();
         guildService.leaveGuild(guildId, userId);
+        gatewayHandler.refreshUserGuilds(userId);
         Map<String, Object> data = new HashMap<>();
         data.put("guild_id", guildId.toString());
         data.put("user_id", userId.toString());
@@ -154,7 +166,10 @@ public class GuildController {
 
     @GetMapping("/{guildId}/members/{userId}/roles")
     public ResponseEntity<List<Map<String, Object>>> getMemberRoles(@PathVariable Long guildId,
-                                                                    @PathVariable Long userId) {
+                                                                    @PathVariable Long userId,
+                                                                    Authentication auth) {
+        Long viewerId = (Long) auth.getPrincipal();
+        channelAccess.requireGuildMember(guildId, viewerId);
         List<Map<String, Object>> result = guildService.getMemberRoles(guildId, userId).stream()
                 .map(this::roleToJson).toList();
         return ResponseEntity.ok(result);
@@ -203,6 +218,7 @@ public class GuildController {
                                            Authentication auth) {
         Long actorId = (Long) auth.getPrincipal();
         guildService.kickMember(guildId, userId, actorId);
+        gatewayHandler.refreshUserGuilds(userId);
         Map<String, Object> data = new HashMap<>();
         data.put("guild_id", guildId.toString());
         data.put("user_id", userId.toString());
@@ -218,6 +234,7 @@ public class GuildController {
         Long actorId = (Long) auth.getPrincipal();
         String reason = body != null ? (String) body.get("reason") : null;
         GuildBan ban = guildService.banMember(guildId, userId, actorId, reason);
+        gatewayHandler.refreshUserGuilds(userId);
         Map<String, Object> data = new HashMap<>();
         data.put("guild_id", guildId.toString());
         data.put("user_id", userId.toString());
