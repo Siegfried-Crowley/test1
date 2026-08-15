@@ -48,7 +48,13 @@ public class CacheService {
     }
 
     public String get(String key) {
-        cleanExpired();
+        // 热路径:只校验当前 key 是否过期,避免每次 O(n) 全表扫描
+        Long exp = expiresAt.get(key);
+        if (exp != null && exp < System.currentTimeMillis()) {
+            store.remove(key);
+            expiresAt.remove(key);
+            return null;
+        }
         return store.get(key);
     }
 
@@ -65,7 +71,12 @@ public class CacheService {
     }
 
     public boolean hasKey(String key) {
-        cleanExpired();
+        Long exp = expiresAt.get(key);
+        if (exp != null && exp < System.currentTimeMillis()) {
+            store.remove(key);
+            expiresAt.remove(key);
+            return false;
+        }
         return store.containsKey(key);
     }
 
@@ -101,10 +112,13 @@ public class CacheService {
 
     private void cleanExpired() {
         long now = System.currentTimeMillis();
-        expiresAt.entrySet().removeIf(e -> e.getValue() < now);
-        // 同步清理 store 中已过期的键
-        Set<String> expiredKeys = new HashSet<>(expiresAt.keySet());
-        store.keySet().removeIf(k -> !expiresAt.containsKey(k) && !store.containsKey(k));
+        // 收集过期键后同时从 expiresAt 与 store 中删除(原先的 removeIf 条件恒为 false,清理从未生效)
+        Set<String> expired = new HashSet<>();
+        expiresAt.forEach((k, v) -> { if (v < now) expired.add(k); });
+        for (String k : expired) {
+            store.remove(k);
+            expiresAt.remove(k);
+        }
     }
 
     private record CacheMessage(String channel, String message, long timestamp) {}

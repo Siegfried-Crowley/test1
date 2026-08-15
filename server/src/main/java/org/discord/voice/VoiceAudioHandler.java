@@ -69,6 +69,11 @@ public class VoiceAudioHandler extends AbstractWebSocketHandler {
             sendErrorAndClose(session, 4401, "Invalid token");
             return;
         }
+        // 校验 token 未过期(joinVoice 分配的 token 有效期为 30 秒)
+        if (alloc.getExpiresAt() != null && alloc.getExpiresAt().isBefore(java.time.Instant.now())) {
+            sendErrorAndClose(session, 4401, "Token expired");
+            return;
+        }
         // 校验该用户当前仍在语音频道(防止用旧 token 顶替别人位置)
         Optional<VoiceState> vs = voiceStateRepository
                 .findByGuildIdAndUserId(alloc.getGuildId(), alloc.getUserId());
